@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useMeetingStore } from '../../store/meetingStore';
+import { useAppStore } from '../../store/appStore';
 import {
   Mic,
   MicOff,
@@ -22,10 +23,12 @@ import {
   Sparkles,
   Command,
   PictureInPicture2,
+  Copy,
 } from 'lucide-react';
 
 export const MeetingControls: React.FC = () => {
   const {
+    meetingId,
     isAudioMuted,
     isVideoOff,
     isScreenSharing,
@@ -50,6 +53,9 @@ export const MeetingControls: React.FC = () => {
     setVirtualBgModalOpen,
     setShortcutsModalOpen,
   } = useMeetingStore();
+
+  const { showToast } = useAppStore();
+  const [copiedLink, setCopiedLink] = useState(false);
 
   const [reactionsOpen, setReactionsOpen] = useState(false);
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
@@ -76,6 +82,15 @@ export const MeetingControls: React.FC = () => {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  const handleCopyInviteLink = () => {
+    const cleanId = meetingId.replace(/-/g, '');
+    const url = `${window.location.origin}/meeting/${cleanId}`;
+    navigator.clipboard.writeText(url);
+    setCopiedLink(true);
+    showToast('Meeting link copied to clipboard!', 'success');
+    setTimeout(() => setCopiedLink(false), 2000);
+  };
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -288,6 +303,16 @@ export const MeetingControls: React.FC = () => {
           <span className="text-[10px] mt-1 font-semibold hidden md:block">
             {isScreenSharing ? 'Stop Share' : 'Share'}
           </span>
+        </button>
+
+        {/* Copy Invite Link */}
+        <button
+          onClick={handleCopyInviteLink}
+          className="flex flex-col items-center justify-center w-12 md:w-14 py-1.5 rounded-xl text-zinc-400 hover:text-cyan-300 hover:bg-zinc-900 transition-all"
+          title="Copy Meeting Invite Link"
+        >
+          {copiedLink ? <Check className="w-5 h-5 text-emerald-400" /> : <Copy className="w-5 h-5 text-cyan-400" />}
+          <span className="text-[10px] mt-1 hidden md:block">{copiedLink ? 'Copied' : 'Invite'}</span>
         </button>
 
         {/* Interactive Whiteboard */}

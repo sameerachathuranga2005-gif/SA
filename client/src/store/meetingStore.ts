@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { socketService } from '../services/socket';
-import { MediaService, MeetingRecorder } from '../services/webrtc';
+import { MediaService, MeetingRecorder, webrtcManager } from '../services/webrtc';
 import { soundEffects } from '../services/soundEffects';
 import { VirtualBackgroundType } from '../services/videoFilters';
 import {
@@ -128,7 +128,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   },
 
   initLobby: async (meetingId, currentUser) => {
-    // Acquire local stream for pre-meeting test
+    // Acquire local webcam & audio
     const stream = await MediaService.getLocalStream({ video: true, audio: true });
 
     const cleanId = meetingId.replace(/-/g, '');
@@ -154,13 +154,17 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   },
 
   joinMeeting: async (currentUser) => {
-    const { meetingId, title, isAudioMuted, isVideoOff, localStream } = get();
+    const { meetingId, isAudioMuted, isVideoOff, localStream } = get();
     const socket = socketService.getSocket();
+    const cleanRoomId = meetingId.replace(/-/g, '');
 
-    // Play pleasant entrance chime
+    // Play entrance chime
     soundEffects.playJoinChime();
 
-    // Create self participant
+    // Configure WebRTC Manager with local stream
+    webrtcManager.setLocalStream(localStream);
+
+    // Self participant
     const selfParticipant: IParticipant = {
       id: 'self',
       socketId: socket?.id || 'self-socket',
@@ -176,7 +180,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       isSpeaking: false,
     };
 
-    // Pre-populate with realistic colleagues for rich active conference testing!
+    // Pre-populate with realistic colleagues so the room is also lively when tested solo
     const simulatedParticipants: IParticipant[] = [
       {
         id: 'sim-1',
@@ -206,32 +210,6 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         isSpeaking: false,
         isSimulated: true,
       },
-      {
-        id: 'sim-3',
-        socketId: 'sim-socket-3',
-        userId: 'demo-friend-4',
-        name: 'Marcus Vance (Senior Architect)',
-        avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=256&h=256&fit=crop&crop=faces',
-        isHost: false,
-        isAudioOn: false,
-        isVideoOn: true,
-        isScreenSharing: false,
-        isHandRaised: false,
-        isSpeaking: false,
-        isSimulated: true,
-      },
-    ];
-
-    const initialMessages: IMeetingChatMessage[] = [
-      {
-        id: 'init-msg-1',
-        senderId: 'demo-friend-1',
-        senderName: 'Sarah Chen',
-        senderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=256&h=256&fit=crop&crop=faces',
-        text: 'Welcome to the Zoom conference room! Audio & video streams are streaming smoothly.',
-        timestamp: 'Just now',
-        to: 'everyone',
-      },
     ];
 
     set({
@@ -239,69 +217,184 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       isJoined: true,
       participants: [selfParticipant, ...simulatedParticipants],
       activeSpeakerId: 'sim-1',
-      chatMessages: initialMessages,
     });
 
-    // Notify backend socket room
+    // Wire WebRTC Manager Callbacks for remote streams
+    webrtcManager.setCallbacks(
+      (remoteSocketId: string, remoteStream: MediaStream) => {
+        console.log('[WebRTC Store] Attaching remote stream for:', remoteSocketId);
+        soundEffects.playJoinChime();
+        set((state) => ({
+          participants: state.participants.map((p) =>
+            p.socketId === remoteSocketId
+              ? { ...p, stream: remoteStream, isVideoOn: true, isAudioOn: true }
+              : p
+          ),
+        }));
+      },
+      (disconnectedSocketId: string) => {
+        soundEffects.playLeaveChime();
+        set((state) => ({
+          participants: state.participants.filter((p) => p.socketId !== disconnectedSocketId),
+        }));
+      }
+    );
+
     if (socket) {
-      socket.emit('meeting:join', {
-        meetingId,
-        title,
-        user: {
-          id: currentUser._id,
-          name: currentUser.name,
-          avatar: currentUser.avatar,
-        },
+      // 1. Join Socket room
+      socket.emit('join-room', {
+        roomId: cleanRoomId,
+        userId: currentUser._id,
+        userName: currentUser.name,
+        avatar: currentUser.avatar,
         isAudioOn: !isAudioMuted,
         isVideoOn: !isVideoOff,
       });
 
-      // Register live listeners
-      socket.on('meeting:user-joined', (data: { participant: any }) => {
+      // 2. Receive list of existing participants in room -> initiate WebRTC SDP offers to all of them
+      socket.on('room-users', async (data: { roomId: string; users: any[] }) => {
+        console.log('[WebRTC] Received existing room users:', data.users);
+        const newParticipants: IParticipant[] = [];
+
+        for (const user of data.users) {
+          if (user.socketId === socket.id) continue;
+
+          newParticipants.push({
+            id: user.socketId,
+            socketId: user.socketId,
+            userId: user.userId,
+            name: user.userName,
+            avatar: user.avatar,
+            isHost: false,
+            isAudioOn: user.isAudioOn ?? true,
+            isVideoOn: user.isVideoOn ?? true,
+            isScreenSharing: false,
+            isHandRaised: false,
+          });
+
+          // Create WebRTC Offer to this existing peer
+          await webrtcManager.createOfferToPeer(user.socketId, {
+            socketId: socket.id,
+            userId: currentUser._id,
+            userName: currentUser.name,
+            avatar: currentUser.avatar,
+          });
+        }
+
+        if (newParticipants.length > 0) {
+          // Replace simulated participants with real peers
+          set((state) => ({
+            participants: [
+              ...state.participants.filter((p) => !p.isSimulated),
+              ...newParticipants,
+            ],
+          }));
+        }
+      });
+
+      // 3. User connected event (a new peer entered after us)
+      socket.on('user-connected', (peer: any) => {
+        console.log('[WebRTC] Remote user connected:', peer);
         soundEffects.playJoinChime();
+
         set((state) => {
-          const exists = state.participants.some((p) => p.socketId === data.participant.socketId);
+          const exists = state.participants.some((p) => p.socketId === peer.socketId);
           if (exists) return state;
+
+          const newPeer: IParticipant = {
+            id: peer.socketId,
+            socketId: peer.socketId,
+            userId: peer.userId,
+            name: peer.userName,
+            avatar: peer.avatar,
+            isHost: false,
+            isAudioOn: peer.isAudioOn ?? true,
+            isVideoOn: peer.isVideoOn ?? true,
+            isScreenSharing: false,
+            isHandRaised: false,
+          };
+
           return {
             participants: [
-              ...state.participants,
-              {
-                id: data.participant.socketId,
-                socketId: data.participant.socketId,
-                userId: data.participant.userId,
-                name: data.participant.name,
-                avatar: data.participant.avatar,
-                isHost: data.participant.isHost,
-                isAudioOn: data.participant.isAudioOn,
-                isVideoOn: data.participant.isVideoOn,
-                isScreenSharing: false,
-                isHandRaised: false,
-              },
+              ...state.participants.filter((p) => !p.isSimulated),
+              newPeer,
             ],
           };
         });
       });
 
-      socket.on('meeting:user-left', (data: { socketId: string; name: string }) => {
-        soundEffects.playLeaveChime();
-        set((state) => ({
-          participants: state.participants.filter((p) => p.socketId !== data.socketId),
-        }));
+      // 4. WebRTC SDP Offer received from another peer -> respond with SDP Answer
+      socket.on('offer', async (data: { callerSocketId: string; sdp: RTCSessionDescriptionInit; callerInfo?: any }) => {
+        console.log('[WebRTC] Received offer from:', data.callerSocketId);
+
+        // Ensure caller is present in participants list
+        if (data.callerInfo) {
+          set((state) => {
+            const exists = state.participants.some((p) => p.socketId === data.callerSocketId);
+            if (exists) return state;
+
+            const callerPeer: IParticipant = {
+              id: data.callerSocketId,
+              socketId: data.callerSocketId,
+              userId: data.callerInfo.userId || 'peer',
+              name: data.callerInfo.userName || 'Teammate',
+              avatar: data.callerInfo.avatar || '',
+              isHost: false,
+              isAudioOn: true,
+              isVideoOn: true,
+              isScreenSharing: false,
+              isHandRaised: false,
+            };
+
+            return {
+              participants: [
+                ...state.participants.filter((p) => !p.isSimulated),
+                callerPeer,
+              ],
+            };
+          });
+        }
+
+        await webrtcManager.handleIncomingOffer(data.callerSocketId, data.sdp);
       });
 
-      socket.on('meeting:participant-updated', (data: { socketId: string; type: string; enabled: boolean }) => {
+      // 5. WebRTC SDP Answer received
+      socket.on('answer', async (data: { senderSocketId: string; sdp: RTCSessionDescriptionInit }) => {
+        console.log('[WebRTC] Received answer from:', data.senderSocketId);
+        await webrtcManager.handleIncomingAnswer(data.senderSocketId, data.sdp);
+      });
+
+      // 6. WebRTC ICE Candidate received
+      socket.on('ice-candidate', async (data: { senderSocketId: string; candidate: RTCIceCandidateInit }) => {
+        await webrtcManager.handleIncomingIceCandidate(data.senderSocketId, data.candidate);
+      });
+
+      // 7. Remote user toggled media (mic / camera / screen)
+      socket.on('user-media-toggled', (data: { socketId: string; userId: string; mediaType: string; isEnabled: boolean }) => {
         set((state) => ({
           participants: state.participants.map((p) => {
             if (p.socketId === data.socketId) {
-              if (data.type === 'audio') return { ...p, isAudioOn: data.enabled };
-              if (data.type === 'video') return { ...p, isVideoOn: data.enabled };
-              if (data.type === 'screen') return { ...p, isScreenSharing: data.enabled };
+              if (data.mediaType === 'audio') return { ...p, isAudioOn: data.isEnabled };
+              if (data.mediaType === 'video') return { ...p, isVideoOn: data.isEnabled };
+              if (data.mediaType === 'screen') return { ...p, isScreenSharing: data.isEnabled };
             }
             return p;
           }),
         }));
       });
 
+      // 8. Remote user disconnected
+      socket.on('user-disconnected', (data: { socketId: string; userId: string }) => {
+        console.log('[WebRTC] User disconnected:', data.socketId);
+        webrtcManager.closePeerConnection(data.socketId);
+        soundEffects.playLeaveChime();
+
+        set((state) => ({
+          participants: state.participants.filter((p) => p.socketId !== data.socketId),
+        }));
+      });
+
+      // In-Meeting Chat & Collaboration
       socket.on('meeting:new-chat-message', (message: IMeetingChatMessage) => {
         soundEffects.playMessagePop();
         set((state) => ({
@@ -348,28 +441,32 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     }
   },
 
-  leaveMeeting: (endForAll = false) => {
-    const { localStream, screenStream, recorder, recordingInterval, meetingId } = get();
+  leaveMeeting: () => {
+    const { screenStream, recorder, recordingInterval, meetingId } = get();
     const socket = socketService.getSocket();
+    const cleanRoomId = meetingId.replace(/-/g, '');
 
-    // Stop streams
-    if (localStream) {
-      localStream.getTracks().forEach((t) => t.stop());
-    }
+    // Close WebRTC peer connections and local media tracks
+    webrtcManager.closeAll();
+
     if (screenStream) {
       screenStream.getTracks().forEach((t) => t.stop());
     }
 
-    // Stop recording if active
+    // Stop recording
     recorder.stop();
     if (recordingInterval) clearInterval(recordingInterval);
 
-    // Notify socket
+    // Notify socket signaling server
     if (socket) {
-      socket.emit('meeting:leave', { meetingId, endForAll });
-      socket.off('meeting:user-joined');
-      socket.off('meeting:user-left');
-      socket.off('meeting:participant-updated');
+      socket.emit('leave-room', { roomId: cleanRoomId });
+      socket.off('room-users');
+      socket.off('user-connected');
+      socket.off('offer');
+      socket.off('answer');
+      socket.off('ice-candidate');
+      socket.off('user-media-toggled');
+      socket.off('user-disconnected');
       socket.off('meeting:new-chat-message');
       socket.off('meeting:reaction-received');
       socket.off('meeting:hand-status');
@@ -393,6 +490,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   toggleAudio: () => {
     const { localStream, isAudioMuted, meetingId } = get();
     const newMuted = !isAudioMuted;
+    const cleanRoomId = meetingId.replace(/-/g, '');
 
     if (localStream) {
       localStream.getAudioTracks().forEach((track) => {
@@ -409,10 +507,10 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 
     const socket = socketService.getSocket();
     if (socket) {
-      socket.emit('meeting:toggle-media', {
-        meetingId,
-        type: 'audio',
-        enabled: !newMuted,
+      socket.emit('toggle-media', {
+        roomId: cleanRoomId,
+        mediaType: 'audio',
+        isEnabled: !newMuted,
       });
     }
   },
@@ -420,6 +518,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   toggleVideo: async () => {
     const { localStream, isVideoOff, meetingId } = get();
     const newVideoOff = !isVideoOff;
+    const cleanRoomId = meetingId.replace(/-/g, '');
 
     if (localStream) {
       localStream.getVideoTracks().forEach((track) => {
@@ -436,24 +535,31 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 
     const socket = socketService.getSocket();
     if (socket) {
-      socket.emit('meeting:toggle-media', {
-        meetingId,
-        type: 'video',
-        enabled: !newVideoOff,
+      socket.emit('toggle-media', {
+        roomId: cleanRoomId,
+        mediaType: 'video',
+        isEnabled: !newVideoOff,
       });
     }
   },
 
   toggleScreenShare: async () => {
     const { isScreenSharing, localStream, screenStream, meetingId } = get();
+    const cleanRoomId = meetingId.replace(/-/g, '');
 
     if (!isScreenSharing) {
       const displayStream = await MediaService.getDisplayStream();
       if (!displayStream) return;
 
-      displayStream.getVideoTracks()[0].onended = () => {
+      const screenTrack = displayStream.getVideoTracks()[0];
+
+      // Handle user ending screen share from browser top bar
+      screenTrack.onended = () => {
         get().toggleScreenShare();
       };
+
+      // Replace video track in all active WebRTC peer connections!
+      await webrtcManager.replaceVideoTrack(screenTrack);
 
       set((state) => ({
         screenStream: displayStream,
@@ -465,15 +571,21 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 
       const socket = socketService.getSocket();
       if (socket) {
-        socket.emit('meeting:toggle-media', {
-          meetingId,
-          type: 'screen',
-          enabled: true,
+        socket.emit('toggle-media', {
+          roomId: cleanRoomId,
+          mediaType: 'screen',
+          isEnabled: true,
         });
       }
     } else {
       if (screenStream) {
         screenStream.getTracks().forEach((t) => t.stop());
+      }
+
+      // Revert video track back to webcam in all WebRTC peer connections
+      const originalCamTrack = localStream ? localStream.getVideoTracks()[0] : null;
+      if (originalCamTrack) {
+        await webrtcManager.replaceVideoTrack(originalCamTrack);
       }
 
       set((state) => ({
@@ -486,10 +598,10 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 
       const socket = socketService.getSocket();
       if (socket) {
-        socket.emit('meeting:toggle-media', {
-          meetingId,
-          type: 'screen',
-          enabled: false,
+        socket.emit('toggle-media', {
+          roomId: cleanRoomId,
+          mediaType: 'screen',
+          isEnabled: false,
         });
       }
     }

@@ -147,4 +147,211 @@ export class WebRTCManager {
   }
 
   // Handle incoming SDP Offer and send back SDP Answer
-  public async handleIncomingOffer(callerSocketId: string, sdp: RTCSe
+  public async handleIncomingOffer(callerSocketId: string, sdp: RTCSessionDescriptionInit): Promise<void> {
+    const pc = this.getOrCreatePeerConnection(callerSocketId);
+
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      const socket = socketService.getSocket();
+      if (socket) {
+        socket.emit('answer', {
+          targetSocketId: callerSocketId,
+          sdp: answer,
+        });
+      }
+    } catch (err) {
+      console.error('[WebRTC] Error handling offer from:', callerSocketId, err);
+    }
+  }
+
+  // Handle incoming SDP Answer
+  public async handleIncomingAnswer(senderSocketId: string, sdp: RTCSessionDescriptionInit): Promise<void> {
+    const pc = this.peers.get(senderSocketId);
+    if (!pc) return;
+
+    try {
+      if (pc.signalingState !== 'stable') {
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      }
+    } catch (err) {
+      console.error('[WebRTC] Error setting remote description from answer:', senderSocketId, err);
+    }
+  }
+
+  // Handle incoming ICE Candidate
+  public async handleIncomingIceCandidate(senderSocketId: string, candidate: RTCIceCandidateInit): Promise<void> {
+    const pc = this.peers.get(senderSocketId);
+    if (!pc || !candidate) return;
+
+    try {
+      await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    } catch (err) {
+      console.warn('[WebRTC] Error adding ICE candidate from:', senderSocketId, err);
+    }
+  }
+
+  // Replace video track across all active peer connections (e.g., when sharing screen or switching camera)
+  public async replaceVideoTrack(newTrack: MediaStreamTrack | null): Promise<void> {
+    for (const [socketId, pc] of this.peers.entries()) {
+      try {
+        const senders = pc.getSenders();
+        const videoSender = senders.find((s) => s.track && s.track.kind === 'video');
+
+        if (videoSender && newTrack) {
+          await videoSender.replaceTrack(newTrack);
+        } else if (!videoSender && newTrack && this.localStream) {
+          pc.addTrack(newTrack, this.localStream);
+        }
+      } catch (err) {
+        console.error('[WebRTC] Error replacing video track for peer:', socketId, err);
+      }
+    }
+  }
+
+  // Close specific peer connection
+  public closePeerConnection(socketId: string) {
+    const pc = this.peers.get(socketId);
+    if (pc) {
+      pc.close();
+      this.peers.delete(socketId);
+      if (this.onPeerDisconnectedCb) {
+        this.onPeerDisconnectedCb(socketId);
+      }
+    }
+  }
+
+  // Close all peer connections and release local tracks
+  public closeAll() {
+    for (const [, pc] of this.peers.entries()) {
+      pc.close();
+    }
+    this.peers.clear();
+
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => track.stop());
+      this.localStream = null;
+    }
+  }
+
+  private getOrCreatePeerConnection(socketId: string): RTCPeerConnection {
+    let pc = this.peers.get(socketId);
+    if (pc) return pc;
+
+    pc = new RTCPeerConnection(ICE_SERVERS);
+    this.peers.set(socketId, pc);
+
+    // Add local tracks to outgoing peer connection
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => {
+        pc!.addTrack(track, this.localStream!);
+      });
+    }
+
+    // ICE Candidate generation -> send to peer via Socket.io
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        const socket = socketService.getSocket();
+        if (socket) {
+          socket.emit('ice-candidate', {
+            targetSocketId: socketId,
+            candidate: event.candidate,
+          });
+        }
+      }
+    };
+
+    // Remote Track received -> emit remote stream
+    pc.ontrack = (event) => {
+      console.log('[WebRTC] Received remote stream from peer:', socketId);
+      if (event.streams && event.streams[0]) {
+        if (this.onRemoteStreamCb) {
+          this.onRemoteStreamCb(socketId, event.streams[0]);
+        }
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log(`[WebRTC] Peer ${socketId} connection state:`, pc!.connectionState);
+      if (
+        pc!.connectionState === 'disconnected' ||
+        pc!.connectionState === 'failed' ||
+        pc!.connectionState === 'closed'
+      ) {
+        this.closePeerConnection(socketId);
+      }
+    };
+
+    return pc;
+  }
+}
+
+export const webrtcManager = new WebRTCManager();
+
+// Meeting Recording Manager using MediaRecorder API
+export class MeetingRecorder {
+  private mediaRecorder: MediaRecorder | null = null;
+  private recordedChunks: Blob[] = [];
+  private recordingStartTime = 0;
+  private isRecording = false;
+
+  public start(stream: MediaStream, meetingId: string): boolean {
+    try {
+      this.recordedChunks = [];
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+        ? 'video/webm;codecs=vp9,opus'
+        : 'video/webm';
+
+      this.mediaRecorder = new MediaRecorder(stream, { mimeType });
+
+      this.mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          this.recordedChunks.push(event.data);
+        }
+      };
+
+      this.mediaRecorder.onstop = () => {
+        this.download(meetingId);
+      };
+
+      this.mediaRecorder.start(1000);
+      this.recordingStartTime = Date.now();
+      this.isRecording = true;
+      return true;
+    } catch (err) {
+      console.error('[MeetingRecorder] Failed to start recording:', err);
+      return false;
+    }
+  }
+
+  public stop(): void {
+    if (this.mediaRecorder && this.isRecording) {
+      this.mediaRecorder.stop();
+      this.isRecording = false;
+    }
+  }
+
+  public getDurationSeconds(): number {
+    if (!this.isRecording) return 0;
+    return Math.floor((Date.now() - this.recordingStartTime) / 1000);
+  }
+
+  private download(meetingId: string): void {
+    if (this.recordedChunks.length === 0) return;
+
+    const blob = new Blob(this.recordedChunks, { type: 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    a.download = `OmniSync-Zoom-Meeting-${meetingId}-${new Date().toISOString().slice(0, 10)}.webm`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    }, 100);
+  }
+}
