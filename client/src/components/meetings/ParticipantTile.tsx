@@ -1,8 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { IParticipant } from '../../types';
 import { Avatar } from '../common/Avatar';
-import { useMeetingStore } from '../../store/meetingStore';
-import { VIRTUAL_BACKGROUND_PRESETS } from '../../services/videoFilters';
 import {
   Mic,
   MicOff,
@@ -26,18 +24,12 @@ export const ParticipantTile: React.FC<ParticipantTileProps> = ({
   className = '',
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { virtualBg } = useMeetingStore();
-
-  const isSelf = participant.id === 'self';
-  const activeBgPreset = isSelf
-    ? VIRTUAL_BACKGROUND_PRESETS.find((p) => p.id === virtualBg)
-    : null;
 
   useEffect(() => {
     if (videoRef.current && participant.stream) {
       videoRef.current.srcObject = participant.stream;
     }
-  }, [participant.stream, participant.isVideoOn, virtualBg]);
+  }, [participant.stream, participant.isVideoOn]);
 
   const hasVideoStream = participant.stream && participant.isVideoOn;
 
@@ -49,37 +41,13 @@ export const ParticipantTile: React.FC<ParticipantTileProps> = ({
           : 'border-zinc-800/80 hover:border-zinc-700'
       } ${className}`}
     >
-      {/* Virtual Background Image or Solid Chroma Screen (Blue Screen / Green Screen) */}
-      {isSelf && hasVideoStream && activeBgPreset?.type === 'image' && activeBgPreset.imageUrl && (
-        <img
-          src={activeBgPreset.imageUrl}
-          alt="Virtual Background"
-          className="absolute inset-0 w-full h-full object-cover z-0"
-        />
-      )}
-
-      {isSelf && hasVideoStream && activeBgPreset?.type === 'color' && activeBgPreset.bgColor && (
-        <div
-          style={{ backgroundColor: activeBgPreset.bgColor }}
-          className="absolute inset-0 w-full h-full z-0 flex items-center justify-center"
-        >
-          <span className="text-[10px] uppercase font-mono tracking-widest text-white/40 font-bold">
-            {activeBgPreset.label}
-          </span>
-        </div>
-      )}
-
-      {/* Real Video Stream */}
+      {/* Real Video Stream (AI Segmentation & Virtual Background Stream) */}
       {hasVideoStream ? (
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted={participant.id === 'self'}
-          style={{
-            filter: isSelf && activeBgPreset?.cssFilter ? activeBgPreset.cssFilter : undefined,
-            opacity: isSelf && activeBgPreset?.type === 'image' ? 0.9 : 1,
-          }}
           className={`relative z-10 w-full h-full object-cover ${
             participant.id === 'self' && !participant.isScreenSharing ? 'scale-x-[-1]' : ''
           }`}

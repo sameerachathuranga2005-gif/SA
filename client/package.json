@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mediapipe/selfie_segmentation": "^0.1.1675465747",
+    "@mediapipe/tasks-vision": "^1.2.3",
     "axios": "^1.7.9",
     "clsx": "^2.1.1",
     "firebase": "^13.4.0",

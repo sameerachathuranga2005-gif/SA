@@ -2,7 +2,8 @@ import { create } from 'zustand';
 import { socketService } from '../services/socket';
 import { MediaService, MeetingRecorder, webrtcManager } from '../services/webrtc';
 import { soundEffects } from '../services/soundEffects';
-import { VirtualBackgroundType } from '../services/videoFilters';
+import { VIRTUAL_BACKGROUND_PRESETS, VirtualBackgroundType } from '../services/videoFilters';
+import { videoProcessor, BackgroundMode } from '../services/videoProcessor';
 import {
   IParticipant,
   IMeetingChatMessage,
@@ -29,6 +30,7 @@ interface MeetingState {
   isVideoOff: boolean;
   isScreenSharing: boolean;
   virtualBg: VirtualBackgroundType;
+  customBgUrl: string | null;
 
   // Recording
   isRecording: boolean;
@@ -67,7 +69,7 @@ interface MeetingState {
   toggleWhiteboard: () => void;
   toggleRecord: () => void;
   toggleHandRaised: () => void;
-  setVirtualBg: (bg: VirtualBackgroundType) => void;
+  setVirtualBg: (bg: VirtualBackgroundType, customUrl?: string) => Promise<void>;
   sendChatMessage: (text: string, to?: string) => void;
   sendReaction: (emoji: string) => void;
   setViewMode: (mode: 'gallery' | 'speaker') => void;
@@ -97,6 +99,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   isVideoOff: false,
   isScreenSharing: false,
   virtualBg: 'none',
+  customBgUrl: null,
 
   isRecording: false,
   recordingDuration: 0,
@@ -128,8 +131,9 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   },
 
   initLobby: async (meetingId, currentUser) => {
-    // Acquire local webcam & audio
-    const stream = await MediaService.getLocalStream({ video: true, audio: true });
+    // Acquire local webcam & audio and initialize AI video processor
+    const rawStream = await MediaService.getLocalStream({ video: true, audio: true });
+    const stream = (await videoProcessor.setSourceStream(rawStream)) || rawStream;
 
     const cleanId = meetingId.replace(/-/g, '');
     const formattedId =
@@ -446,8 +450,9 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     const socket = socketService.getSocket();
     const cleanRoomId = meetingId.replace(/-/g, '');
 
-    // Close WebRTC peer connections and local media tracks
+    // Close WebRTC peer connections, video processor, and local media tracks
     webrtcManager.closeAll();
+    videoProcessor.stop();
 
     if (screenStream) {
       screenStream.getTracks().forEach((t) => t.stop());
@@ -662,7 +667,36 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     }
   },
 
-  setVirtualBg: (bg) => set({ virtualBg: bg }),
+  setVirtualBg: async (bg, customUrl) => {
+    set({ virtualBg: bg });
+    if (customUrl) {
+      set({ customBgUrl: customUrl });
+    }
+
+    let mode: BackgroundMode = 'none';
+    let imageUrl: string | undefined = undefined;
+
+    if (bg === 'blur-soft' || bg === 'blur-light') {
+      mode = 'blur-soft';
+    } else if (bg === 'blur-strong' || bg === 'blur-heavy') {
+      mode = 'blur-strong';
+    } else if (bg === 'custom') {
+      mode = 'image';
+      imageUrl = customUrl || get().customBgUrl || undefined;
+    } else if (bg !== 'none') {
+      mode = 'image';
+      const preset = VIRTUAL_BACKGROUND_PRESETS.find((p) => p.id === bg);
+      imageUrl = preset?.imageUrl;
+    }
+
+    await videoProcessor.updateSettings({ mode, imageUrl });
+
+    // Seamlessly update outgoing video track across all active peer connections
+    const activeTrack = videoProcessor.getOutputVideoTrack();
+    if (activeTrack) {
+      await webrtcManager.replaceVideoTrack(activeTrack);
+    }
+  },
 
   sendChatMessage: (text, to = 'everyone') => {
     const { meetingId, participants } = get();

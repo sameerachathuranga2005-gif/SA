@@ -1,26 +1,25 @@
 export type VirtualBackgroundType =
   | 'none'
+  | 'blur-soft'
+  | 'blur-strong'
   | 'blur-light'
   | 'blur-heavy'
-  | 'studio-blue'
-  | 'studio-green'
-  | 'executive-boardroom'
-  | 'office'
-  | 'penthouse'
-  | 'cafe'
-  | 'ocean-beach'
-  | 'deep-galaxy'
-  | 'neon-cyber';
+  | 'custom'
+  | 'modern-office'
+  | 'cozy-studio'
+  | 'minimal-interior'
+  | 'skyline-penthouse'
+  | 'nature-beach'
+  | 'plant-loft';
 
 export interface IVirtualBackgroundPreset {
   id: VirtualBackgroundType;
   label: string;
-  category: 'none' | 'blur' | 'chroma' | 'interior' | 'scenic';
-  type: 'none' | 'blur' | 'color' | 'image';
+  category: 'none' | 'blur' | 'interior' | 'scenic' | 'custom';
+  type: 'none' | 'blur' | 'image';
   previewUrl?: string;
   imageUrl?: string;
-  bgColor?: string;
-  cssFilter?: string;
+  blurAmount?: number;
 }
 
 export const VIRTUAL_BACKGROUND_PRESETS: IVirtualBackgroundPreset[] = [
@@ -31,92 +30,68 @@ export const VIRTUAL_BACKGROUND_PRESETS: IVirtualBackgroundPreset[] = [
     type: 'none',
   },
   {
-    id: 'blur-light',
-    label: 'Slight Blur',
+    id: 'blur-soft',
+    label: 'Soft Blur (12px)',
     category: 'blur',
     type: 'blur',
-    previewUrl: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=160&h=100&fit=crop',
-    cssFilter: 'blur(8px)',
+    blurAmount: 12,
+    previewUrl: 'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=320&q=80',
   },
   {
-    id: 'blur-heavy',
-    label: 'Cinematic Blur',
+    id: 'blur-strong',
+    label: 'Strong Blur (20px)',
     category: 'blur',
     type: 'blur',
-    previewUrl: 'https://images.unsplash.com/photo-1497366811353-6870744d04b2?w=160&h=100&fit=crop',
-    cssFilter: 'blur(22px)',
+    blurAmount: 20,
+    previewUrl: 'https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=320&q=80',
   },
-  // Studio Solid Screens (Blue Screen & Green Screen)
+  // 6 Curated High-Resolution Real-World Backgrounds
   {
-    id: 'studio-blue',
-    label: 'Studio Blue Screen',
-    category: 'chroma',
-    type: 'color',
-    bgColor: '#0047bb', // Chroma Key Blue
-  },
-  {
-    id: 'studio-green',
-    label: 'Studio Green Screen',
-    category: 'chroma',
-    type: 'color',
-    bgColor: '#00b140', // Chroma Key Green
-  },
-  // Interiors
-  {
-    id: 'executive-boardroom',
-    label: 'Executive Boardroom',
+    id: 'modern-office',
+    label: 'Executive Tech Office',
     category: 'interior',
     type: 'image',
-    previewUrl: 'https://images.unsplash.com/photo-1431540015161-0bf868a2d407?w=160&h=100&fit=crop',
-    imageUrl: 'https://images.unsplash.com/photo-1431540015161-0bf868a2d407?w=1920&q=80&fit=crop',
+    previewUrl: 'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=320&q=80',
+    imageUrl: 'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=1920&q=80',
   },
   {
-    id: 'office',
-    label: 'Modern Tech Office',
+    id: 'cozy-studio',
+    label: 'Cozy Library Studio',
     category: 'interior',
     type: 'image',
-    previewUrl: 'https://images.unsplash.com/photo-1497215728101-856f4ea42174?w=160&h=100&fit=crop',
-    imageUrl: 'https://images.unsplash.com/photo-1497215728101-856f4ea42174?w=1920&q=80&fit=crop',
+    previewUrl: 'https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=320&q=80',
+    imageUrl: 'https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=1920&q=80',
   },
   {
-    id: 'penthouse',
+    id: 'minimal-interior',
+    label: 'Minimalist Architecture',
+    category: 'interior',
+    type: 'image',
+    previewUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=320&q=80',
+    imageUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1920&q=80',
+  },
+  {
+    id: 'skyline-penthouse',
     label: 'Skyline Penthouse',
     category: 'interior',
     type: 'image',
-    previewUrl: 'https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=160&h=100&fit=crop',
-    imageUrl: 'https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=1920&q=80&fit=crop',
+    previewUrl: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=320&q=80',
+    imageUrl: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=1920&q=80',
   },
   {
-    id: 'cafe',
-    label: 'Cozy Cafe',
-    category: 'interior',
-    type: 'image',
-    previewUrl: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=160&h=100&fit=crop',
-    imageUrl: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=1920&q=80&fit=crop',
-  },
-  // Scenic & Creative
-  {
-    id: 'ocean-beach',
-    label: 'Tropical Sunset Beach',
+    id: 'nature-beach',
+    label: 'Lush Tropical Beach',
     category: 'scenic',
     type: 'image',
-    previewUrl: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=160&h=100&fit=crop',
-    imageUrl: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1920&q=80&fit=crop',
+    previewUrl: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=320&q=80',
+    imageUrl: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1920&q=80',
   },
   {
-    id: 'deep-galaxy',
-    label: 'Deep Space Nebula',
+    id: 'plant-loft',
+    label: 'Scandinavian Plant Loft',
     category: 'scenic',
     type: 'image',
-    previewUrl: 'https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?w=160&h=100&fit=crop',
-    imageUrl: 'https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?w=1920&q=80&fit=crop',
-  },
-  {
-    id: 'neon-cyber',
-    label: 'Cyberpunk Neon Studio',
-    category: 'scenic',
-    type: 'image',
-    previewUrl: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=160&h=100&fit=crop',
-    imageUrl: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=1920&q=80&fit=crop',
+    previewUrl: 'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=320&q=80',
+    imageUrl: 'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=1920&q=80',
   },
 ];
