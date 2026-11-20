@@ -23,6 +23,7 @@ export const MeetingsModule: React.FC = () => {
 
   const [joinModalOpen, setJoinModalOpen] = useState(false);
   const [meetingIdInput, setMeetingIdInput] = useState('');
+  const [passcodeInput, setPasscodeInput] = useState('');
   const [copiedId, setCopiedId] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
 
@@ -88,8 +89,9 @@ export const MeetingsModule: React.FC = () => {
       showToast('Please enter a 9-digit Meeting ID', 'error');
       return;
     }
+    const cleanPwd = passcodeInput.trim();
     setJoinModalOpen(false);
-    navigate(`/meeting/${cleanId}`);
+    navigate(cleanPwd ? `/meeting/${cleanId}?pwd=${cleanPwd}` : `/meeting/${cleanId}`);
   };
 
   return (
@@ -292,18 +294,38 @@ export const MeetingsModule: React.FC = () => {
                 />
               </div>
 
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+                  Meeting Passcode
+                </label>
+                <input
+                  type="text"
+                  maxLength={8}
+                  value={passcodeInput}
+                  onChange={(e) => setPasscodeInput(e.target.value)}
+                  placeholder="6-digit passcode (e.g. 482910)"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm font-mono text-amber-300 placeholder-zinc-500 focus:outline-none focus:border-amber-500 transition-colors"
+                />
+              </div>
+
               <div className="flex items-center gap-2 text-xs text-zinc-400">
                 <span>Quick Fill:</span>
                 <button
                   type="button"
-                  onClick={() => setMeetingIdInput('412-589-301')}
+                  onClick={() => {
+                    setMeetingIdInput('412-589-301');
+                    setPasscodeInput('482910');
+                  }}
                   className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono text-[11px]"
                 >
                   Sarah's Room
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMeetingIdInput('729-104-682')}
+                  onClick={() => {
+                    setMeetingIdInput('729-104-682');
+                    setPasscodeInput('619420');
+                  }}
                   className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono text-[11px]"
                 >
                   David's Room

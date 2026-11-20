@@ -64,6 +64,14 @@ export const App: React.FC = () => {
           }
         />
         <Route
+          path="/meeting"
+          element={
+            <ProtectedRoute>
+              <MeetingPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/meeting/:meetingId"
           element={
             <ProtectedRoute>

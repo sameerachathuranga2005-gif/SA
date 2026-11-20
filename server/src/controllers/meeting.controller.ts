@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { z } from 'zod';
 import { AuthenticatedRequest } from '../middlewares/auth.middleware.js';
 import { generateMeetingId } from '../services/auth.service.js';
+import { socketManager } from '../sockets/socket.manager.js';
 
 export const createMeetingSchema = z.object({
   title: z.string().optional(),
@@ -16,6 +17,18 @@ export class MeetingController {
       const passcode = Math.floor(100000 + Math.random() * 900000).toString();
       const title = req.body.title || `${user.name}'s Video Meeting`;
 
+      // Register room in active socket manager
+      socketManager.registerMeeting(meetingId, {
+        title,
+        hostId: user._id,
+        hostName: user.name,
+        passcode,
+      });
+
+      const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+      const cleanId = meetingId.replace(/-/g, '');
+      const inviteLink = `${clientUrl}/meeting/${cleanId}?pwd=${passcode}`;
+
       res.status(200).json({
         success: true,
         data: {
@@ -24,7 +37,7 @@ export class MeetingController {
           hostId: user._id,
           hostName: user.name,
           passcode,
-          inviteLink: `${process.env.CLIENT_URL || 'http://localhost:5173'}/meeting/${meetingId.replace(/-/g, '')}`,
+          inviteLink,
           createdAt: new Date(),
         },
       });
@@ -40,6 +53,7 @@ export class MeetingController {
     try {
       const { meetingId } = req.params;
       const cleanId = meetingId.replace(/-/g, '');
+      const room = socketManager.getMeetingRoom(cleanId);
 
       // Format with hyphens: XXX-XXX-XXX
       const formattedId =
@@ -51,7 +65,11 @@ export class MeetingController {
         success: true,
         data: {
           meetingId: formattedId,
-          title: `Video Conference Room ${formattedId}`,
+          title: room?.title || `Video Conference Room ${formattedId}`,
+          hostName: room?.hostName,
+          requiresPasscode: true,
+          hasPasscode: true,
+          waitingRoomEnabled: room?.waitingRoomEnabled ?? false,
           isValid: true,
         },
       });

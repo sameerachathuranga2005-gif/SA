@@ -30,6 +30,9 @@ import {
 export const MeetingControls: React.FC = () => {
   const {
     meetingId,
+    title,
+    hostName,
+    passcode,
     isAudioMuted,
     isVideoOff,
     isScreenSharing,
@@ -90,10 +93,19 @@ export const MeetingControls: React.FC = () => {
 
   const handleCopyInviteLink = () => {
     const cleanId = meetingId.replace(/-/g, '');
-    const url = `${window.location.origin}/meeting/${cleanId}`;
-    navigator.clipboard.writeText(url);
+    const directUrl = `${window.location.origin}/meeting/${cleanId}?pwd=${passcode}`;
+    const text = `${hostName || 'The host'} is inviting you to a scheduled OmniSync Video Meeting:
+
+Topic: ${title}
+Meeting ID: ${meetingId}
+Passcode: ${passcode}
+
+Join Meeting via Direct Link:
+${directUrl}`;
+
+    navigator.clipboard.writeText(text);
     setCopiedLink(true);
-    showToast('Meeting link copied to clipboard!', 'success');
+    showToast('Meeting invitation copied to clipboard!', 'success');
     setTimeout(() => setCopiedLink(false), 2000);
   };
 

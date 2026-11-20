@@ -31,6 +31,32 @@ class SocketManager {
   // Map of meetingId -> IMeetingRoom details (metadata)
   private meetingRooms: Map<string, IMeetingRoom> = new Map();
 
+  public registerMeeting(
+    meetingId: string,
+    data: { title: string; hostId: string; hostName: string; passcode: string }
+  ): IMeetingRoom {
+    const cleanId = meetingId.replace(/-/g, '');
+    const room: IMeetingRoom = {
+      meetingId: cleanId,
+      title: data.title,
+      hostId: data.hostId,
+      hostName: data.hostName,
+      passcode: data.passcode,
+      createdAt: new Date(),
+      isLocked: false,
+      waitingRoomEnabled: false,
+      participants: new Map(),
+      waitingParticipants: new Map(),
+    };
+    this.meetingRooms.set(cleanId, room);
+    return room;
+  }
+
+  public getMeetingRoom(meetingId: string): IMeetingRoom | undefined {
+    const cleanId = meetingId.replace(/-/g, '');
+    return this.meetingRooms.get(cleanId);
+  }
+
   public initialize(httpServer: HttpServer, _clientUrl?: string) {
     this.io = new Server(httpServer, {
       cors: {
@@ -113,7 +139,7 @@ class SocketManager {
       // REAL-TIME WebRTC SIGNALING SPECIFICATION
       // ==========================================
 
-      // 1. Join Room: (roomId, userId, userName, avatar, isAudioOn, isVideoOn)
+      // 1. Join Room: (roomId, userId, userName, avatar, passcode, isAudioOn, isVideoOn)
       socket.on(
         'join-room',
         (data: {
@@ -121,18 +147,86 @@ class SocketManager {
           userId: string;
           userName: string;
           avatar?: string;
+          passcode?: string;
           isAudioOn?: boolean;
           isVideoOn?: boolean;
         }) => {
-          const { roomId, userId: peerUserId, userName, avatar, isAudioOn = true, isVideoOn = true } = data;
+          const { roomId, userId: peerUserId, userName, avatar, passcode: providedPasscode, isAudioOn = true, isVideoOn = true } = data;
           const cleanRoomId = roomId.replace(/-/g, '');
+          const currentUserId = peerUserId || userId;
+
+          // Check or create room metadata
+          let room = this.meetingRooms.get(cleanRoomId);
+          if (!room) {
+            // Room does not exist yet -> Current user becomes the Host!
+            const generatedPasscode = providedPasscode || Math.floor(100000 + Math.random() * 900000).toString();
+            room = {
+              meetingId: cleanRoomId,
+              title: `${userName}'s Video Meeting`,
+              hostId: currentUserId,
+              hostName: userName,
+              hostSocketId: socket.id,
+              passcode: generatedPasscode,
+              createdAt: new Date(),
+              isLocked: false,
+              waitingRoomEnabled: false,
+              participants: new Map(),
+              waitingParticipants: new Map(),
+            };
+            this.meetingRooms.set(cleanRoomId, room);
+          }
+
+          const isHost = room.hostId === currentUserId || room.hostSocketId === socket.id;
+          if (isHost) {
+            room.hostSocketId = socket.id;
+          }
+
+          // If participant is NOT host, enforce Passcode verification
+          if (!isHost) {
+            if (!providedPasscode || providedPasscode.trim() !== room.passcode.trim()) {
+              console.warn(`[Meeting Security] Rejected join for ${userName} (${socket.id}) in room ${cleanRoomId}: Invalid Passcode`);
+              socket.emit('meeting:error', {
+                code: 'INVALID_PASSCODE',
+                message: 'Invalid Meeting Passcode. Please enter the correct 6-digit passcode to join.',
+              });
+              return;
+            }
+
+            // Check Waiting Room
+            if (room.waitingRoomEnabled) {
+              console.log(`[Meeting Security] ${userName} (${socket.id}) placed in waiting room for ${cleanRoomId}`);
+              const waitingUser = {
+                socketId: socket.id,
+                userId: currentUserId,
+                userName: userName || 'Participant',
+                avatar: avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(userName || 'User')}`,
+                joinedAt: new Date(),
+              };
+              room.waitingParticipants.set(socket.id, waitingUser);
+
+              socket.emit('meeting:waiting-room', {
+                inWaitingRoom: true,
+                message: 'Please wait, the meeting host will let you in soon.',
+                title: room.title,
+                meetingId: cleanRoomId,
+              });
+
+              if (room.hostSocketId) {
+                this.io?.to(room.hostSocketId).emit('meeting:waiting-room-updated', {
+                  waitingUsers: Array.from(room.waitingParticipants.values()),
+                });
+              }
+              return;
+            }
+          }
+
+          // Admitted to room
           socket.currentRoomId = cleanRoomId;
           socket.join(`room:${cleanRoomId}`);
 
           if (!this.rooms.has(cleanRoomId)) {
             this.rooms.set(cleanRoomId, new Map());
           }
-
           const roomPeers = this.rooms.get(cleanRoomId)!;
 
           // Existing participants in the room
@@ -142,7 +236,7 @@ class SocketManager {
 
           const currentPeer: RoomPeer = {
             socketId: socket.id,
-            userId: peerUserId || userId,
+            userId: currentUserId,
             userName: userName || 'Participant',
             avatar: avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(userName || 'User')}`,
             isAudioOn,
@@ -153,6 +247,16 @@ class SocketManager {
 
           roomPeers.set(socket.id, currentPeer);
 
+          // Emit room joined confirmation with security metadata
+          socket.emit('meeting:room-joined', {
+            isHost,
+            passcode: room.passcode,
+            title: room.title,
+            hostId: room.hostId,
+            hostName: room.hostName,
+            waitingRoomEnabled: room.waitingRoomEnabled,
+          });
+
           // Send back list of existing participants to caller so they can initiate WebRTC offers
           socket.emit('room-users', {
             roomId: cleanRoomId,
@@ -162,7 +266,14 @@ class SocketManager {
           // Notify existing room participants that a new user connected
           socket.to(`room:${cleanRoomId}`).emit('user-connected', currentPeer);
 
-          console.log(`[WebRTC] ${currentPeer.userName} (${socket.id}) joined room ${cleanRoomId}. Peers in room: ${roomPeers.size}`);
+          // If user is host, send waiting room roster
+          if (isHost && room.waitingParticipants.size > 0) {
+            socket.emit('meeting:waiting-room-updated', {
+              waitingUsers: Array.from(room.waitingParticipants.values()),
+            });
+          }
+
+          console.log(`[WebRTC] ${currentPeer.userName} (${socket.id}) joined room ${cleanRoomId} [Host: ${isHost}]. Peers: ${roomPeers.size}`);
         }
       );
 
@@ -262,23 +373,272 @@ class SocketManager {
         });
       });
 
-      // In-Meeting Chat Message
-      socket.on('meeting:chat-message', (data: { meetingId: string; text: string }) => {
-        const { meetingId, text } = data;
-        const cleanRoomId = meetingId.replace(/-/g, '');
-        const roomPeers = this.rooms.get(cleanRoomId);
-        const sender = roomPeers?.get(socket.id);
+      // In-Meeting Chat Message (Everyone or Direct Message)
+      socket.on(
+        'meeting:chat-message',
+        (data: {
+          meetingId: string;
+          text: string;
+          to?: string;
+          recipientSocketId?: string;
+          recipientName?: string;
+        }) => {
+          const { meetingId, text, to = 'Everyone', recipientSocketId, recipientName } = data;
+          const cleanRoomId = meetingId.replace(/-/g, '');
+          const roomPeers = this.rooms.get(cleanRoomId);
+          const sender = roomPeers?.get(socket.id);
 
-        const message = {
-          id: `mmsg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-          senderId: userId,
-          senderName: sender?.userName || 'Participant',
-          senderAvatar: sender?.avatar || '',
-          text,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          const isDirect = !!recipientSocketId && recipientSocketId !== 'everyone';
+
+          const message = {
+            id: `mmsg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            senderId: userId,
+            senderName: sender?.userName || 'Participant',
+            senderAvatar: sender?.avatar || '',
+            text,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            to: isDirect ? recipientName || to : 'Everyone',
+            recipientSocketId: isDirect ? recipientSocketId : undefined,
+            isDirect,
+          };
+
+          if (isDirect && recipientSocketId) {
+            // Send privately to target recipient AND echo back to sender
+            this.io?.to(recipientSocketId).emit('meeting:new-chat-message', message);
+            socket.emit('meeting:new-chat-message', message);
+            console.log(`[Meeting Chat] Direct message from ${message.senderName} to ${message.to}`);
+          } else {
+            // Broadcast to everyone in the room
+            this.io?.to(`room:${cleanRoomId}`).emit('meeting:new-chat-message', message);
+            console.log(`[Meeting Chat] Public message from ${message.senderName} to room ${cleanRoomId}`);
+          }
+        }
+      );
+
+      // Waiting Room: Host Toggles Waiting Room
+      socket.on('meeting:toggle-waiting-room', (data: { roomId: string; enabled: boolean }) => {
+        const cleanRoomId = data.roomId.replace(/-/g, '');
+        const room = this.meetingRooms.get(cleanRoomId);
+        if (room && (room.hostId === userId || room.hostSocketId === socket.id)) {
+          room.waitingRoomEnabled = data.enabled;
+          this.io?.to(`room:${cleanRoomId}`).emit('meeting:security-updated', {
+            waitingRoomEnabled: data.enabled,
+          });
+          console.log(`[Host Controls] Waiting room ${data.enabled ? 'enabled' : 'disabled'} for ${cleanRoomId}`);
+        }
+      });
+
+      // Waiting Room: Host Admits Participant
+      socket.on('meeting:admit-peer', (data: { roomId: string; targetSocketId: string }) => {
+        const cleanRoomId = data.roomId.replace(/-/g, '');
+        const room = this.meetingRooms.get(cleanRoomId);
+        if (!room || (room.hostId !== userId && room.hostSocketId !== socket.id)) return;
+
+        const waitingPeer = room.waitingParticipants.get(data.targetSocketId);
+        if (!waitingPeer) return;
+
+        room.waitingParticipants.delete(data.targetSocketId);
+
+        const targetSocket = this.io?.sockets.sockets.get(data.targetSocketId) as AuthenticatedSocket | undefined;
+        if (!targetSocket) return;
+
+        targetSocket.currentRoomId = cleanRoomId;
+        targetSocket.join(`room:${cleanRoomId}`);
+
+        if (!this.rooms.has(cleanRoomId)) {
+          this.rooms.set(cleanRoomId, new Map());
+        }
+        const roomPeers = this.rooms.get(cleanRoomId)!;
+        const existingPeers: RoomPeer[] = Array.from(roomPeers.values()).filter(
+          (p) => p.socketId !== targetSocket.id
+        );
+
+        const currentPeer: RoomPeer = {
+          socketId: targetSocket.id,
+          userId: waitingPeer.userId,
+          userName: waitingPeer.userName,
+          avatar: waitingPeer.avatar,
+          isAudioOn: true,
+          isVideoOn: true,
+          isScreenSharing: false,
+          isHandRaised: false,
         };
+        roomPeers.set(targetSocket.id, currentPeer);
 
-        this.io?.to(`room:${cleanRoomId}`).emit('meeting:new-chat-message', message);
+        // Notify admitted peer with room users
+        targetSocket.emit('meeting:admitted', {
+          roomId: cleanRoomId,
+          title: room.title,
+          hostId: room.hostId,
+          hostName: room.hostName,
+          passcode: room.passcode,
+          users: existingPeers,
+        });
+
+        // Notify existing participants
+        targetSocket.to(`room:${cleanRoomId}`).emit('user-connected', currentPeer);
+
+        // Update host waiting list
+        socket.emit('meeting:waiting-room-updated', {
+          waitingUsers: Array.from(room.waitingParticipants.values()),
+        });
+
+        console.log(`[Host Controls] Host admitted ${waitingPeer.userName} to ${cleanRoomId}`);
+      });
+
+      // Waiting Room: Host Denies Participant
+      socket.on('meeting:deny-peer', (data: { roomId: string; targetSocketId: string }) => {
+        const cleanRoomId = data.roomId.replace(/-/g, '');
+        const room = this.meetingRooms.get(cleanRoomId);
+        if (!room || (room.hostId !== userId && room.hostSocketId !== socket.id)) return;
+
+        const waitingPeer = room.waitingParticipants.get(data.targetSocketId);
+        if (waitingPeer) {
+          room.waitingParticipants.delete(data.targetSocketId);
+          this.io?.to(data.targetSocketId).emit('meeting:denied', {
+            message: 'The meeting host has denied your request to enter.',
+          });
+          socket.emit('meeting:waiting-room-updated', {
+            waitingUsers: Array.from(room.waitingParticipants.values()),
+          });
+          console.log(`[Host Controls] Host denied ${waitingPeer.userName}`);
+        }
+      });
+
+      // Waiting Room: Host Admits All
+      socket.on('meeting:admit-all', (data: { roomId: string }) => {
+        const cleanRoomId = data.roomId.replace(/-/g, '');
+        const room = this.meetingRooms.get(cleanRoomId);
+        if (!room || (room.hostId !== userId && room.hostSocketId !== socket.id)) return;
+
+        const waitingSocketIds = Array.from(room.waitingParticipants.keys());
+        for (const targetSocketId of waitingSocketIds) {
+          const waitingPeer = room.waitingParticipants.get(targetSocketId);
+          if (!waitingPeer) continue;
+
+          room.waitingParticipants.delete(targetSocketId);
+
+          const targetSocket = this.io?.sockets.sockets.get(targetSocketId) as AuthenticatedSocket | undefined;
+          if (!targetSocket) continue;
+
+          targetSocket.currentRoomId = cleanRoomId;
+          targetSocket.join(`room:${cleanRoomId}`);
+
+          if (!this.rooms.has(cleanRoomId)) {
+            this.rooms.set(cleanRoomId, new Map());
+          }
+          const roomPeers = this.rooms.get(cleanRoomId)!;
+          const existingPeers: RoomPeer[] = Array.from(roomPeers.values()).filter(
+            (p) => p.socketId !== targetSocket.id
+          );
+
+          const currentPeer: RoomPeer = {
+            socketId: targetSocket.id,
+            userId: waitingPeer.userId,
+            userName: waitingPeer.userName,
+            avatar: waitingPeer.avatar,
+            isAudioOn: true,
+            isVideoOn: true,
+            isScreenSharing: false,
+            isHandRaised: false,
+          };
+          roomPeers.set(targetSocket.id, currentPeer);
+
+          targetSocket.emit('meeting:admitted', {
+            roomId: cleanRoomId,
+            title: room.title,
+            hostId: room.hostId,
+            hostName: room.hostName,
+            passcode: room.passcode,
+            users: existingPeers,
+          });
+
+          targetSocket.to(`room:${cleanRoomId}`).emit('user-connected', currentPeer);
+        }
+
+        socket.emit('meeting:waiting-room-updated', {
+          waitingUsers: [],
+        });
+      });
+
+      // Host Controls: Mute Individual Participant
+      socket.on('meeting:host-mute-peer', (data: { roomId: string; targetSocketId: string }) => {
+        const cleanRoomId = data.roomId.replace(/-/g, '');
+        const room = this.meetingRooms.get(cleanRoomId);
+        if (!room || (room.hostId !== userId && room.hostSocketId !== socket.id)) return;
+
+        this.io?.to(data.targetSocketId).emit('meeting:host-muted-you');
+
+        const roomPeers = this.rooms.get(cleanRoomId);
+        const targetPeer = roomPeers?.get(data.targetSocketId);
+        if (targetPeer) targetPeer.isAudioOn = false;
+
+        this.io?.to(`room:${cleanRoomId}`).emit('user-media-toggled', {
+          socketId: data.targetSocketId,
+          userId: targetPeer?.userId,
+          mediaType: 'audio',
+          isEnabled: false,
+        });
+
+        console.log(`[Host Controls] Muted participant ${data.targetSocketId}`);
+      });
+
+      // Host Controls: Turn Off Video for Participant
+      socket.on('meeting:host-stop-video', (data: { roomId: string; targetSocketId: string }) => {
+        const cleanRoomId = data.roomId.replace(/-/g, '');
+        const room = this.meetingRooms.get(cleanRoomId);
+        if (!room || (room.hostId !== userId && room.hostSocketId !== socket.id)) return;
+
+        this.io?.to(data.targetSocketId).emit('meeting:host-stopped-your-video');
+
+        const roomPeers = this.rooms.get(cleanRoomId);
+        const targetPeer = roomPeers?.get(data.targetSocketId);
+        if (targetPeer) targetPeer.isVideoOn = false;
+
+        this.io?.to(`room:${cleanRoomId}`).emit('user-media-toggled', {
+          socketId: data.targetSocketId,
+          userId: targetPeer?.userId,
+          mediaType: 'video',
+          isEnabled: false,
+        });
+
+        console.log(`[Host Controls] Stopped video for participant ${data.targetSocketId}`);
+      });
+
+      // Host Controls: Remove (Kick) Participant
+      socket.on('meeting:host-kick-peer', (data: { roomId: string; targetSocketId: string }) => {
+        const cleanRoomId = data.roomId.replace(/-/g, '');
+        const room = this.meetingRooms.get(cleanRoomId);
+        if (!room || (room.hostId !== userId && room.hostSocketId !== socket.id)) return;
+
+        const targetSocket = this.io?.sockets.sockets.get(data.targetSocketId) as AuthenticatedSocket | undefined;
+        if (targetSocket) {
+          targetSocket.emit('meeting:kicked-by-host', {
+            message: 'You have been removed from the meeting by the host.',
+          });
+          this.handleRoomLeave(targetSocket, cleanRoomId);
+          console.log(`[Host Controls] Removed (kicked) participant ${data.targetSocketId}`);
+        }
+      });
+
+      // Host Controls: Mute All
+      socket.on('meeting:mute-all', (data: { meetingId?: string; roomId?: string }) => {
+        const rawId = data.meetingId || data.roomId || '';
+        const cleanRoomId = rawId.replace(/-/g, '');
+        const room = this.meetingRooms.get(cleanRoomId);
+        if (!room || (room.hostId !== userId && room.hostSocketId !== socket.id)) return;
+
+        const roomPeers = this.rooms.get(cleanRoomId);
+        if (roomPeers) {
+          for (const [sId, peer] of roomPeers) {
+            if (sId !== socket.id) {
+              peer.isAudioOn = false;
+              this.io?.to(sId).emit('meeting:host-muted-you');
+            }
+          }
+        }
+        socket.to(`room:${cleanRoomId}`).emit('meeting:host-muted-all');
+        console.log(`[Host Controls] Host muted all participants in ${cleanRoomId}`);
       });
 
       // Emoji Reactions
@@ -309,12 +669,6 @@ class SocketManager {
           name: peer?.userName || 'Participant',
           raised,
         });
-      });
-
-      // Mute All (Host)
-      socket.on('meeting:mute-all', (data: { meetingId: string }) => {
-        const cleanRoomId = data.meetingId.replace(/-/g, '');
-        socket.to(`room:${cleanRoomId}`).emit('meeting:host-muted-all');
       });
 
       // Ping/Pong
@@ -358,6 +712,17 @@ class SocketManager {
   private handleRoomLeave(socket: AuthenticatedSocket, roomId: string) {
     const cleanRoomId = roomId.replace(/-/g, '');
     const roomPeers = this.rooms.get(cleanRoomId);
+    const room = this.meetingRooms.get(cleanRoomId);
+
+    // If socket was waiting in the waiting room, remove and notify host
+    if (room && room.waitingParticipants.has(socket.id)) {
+      room.waitingParticipants.delete(socket.id);
+      if (room.hostSocketId) {
+        this.io?.to(room.hostSocketId).emit('meeting:waiting-room-updated', {
+          waitingUsers: Array.from(room.waitingParticipants.values()),
+        });
+      }
+    }
 
     if (roomPeers && roomPeers.has(socket.id)) {
       const peer = roomPeers.get(socket.id)!;

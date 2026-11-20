@@ -68,15 +68,26 @@ export interface IMeetingParticipant {
   joinedAt: Date;
 }
 
+export interface IWaitingParticipant {
+  socketId: string;
+  userId: string;
+  userName: string;
+  avatar: string;
+  joinedAt: Date;
+}
+
 export interface IMeetingRoom {
   meetingId: string;
   title: string;
   hostId: string;
   hostName: string;
+  hostSocketId?: string;
   passcode: string;
   createdAt: Date;
   isLocked: boolean;
+  waitingRoomEnabled: boolean;
   participants: Map<string, IMeetingParticipant>; // socketId -> participant
+  waitingParticipants: Map<string, IWaitingParticipant>; // socketId -> waiting participant
 }
 
 export interface IMeetingChatMessage {
@@ -86,4 +97,7 @@ export interface IMeetingChatMessage {
   senderAvatar: string;
   text: string;
   timestamp: string;
+  to?: string;
+  recipientSocketId?: string;
+  isDirect?: boolean;
 }

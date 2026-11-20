@@ -84,6 +84,14 @@ export interface IScheduledMeeting {
 // ZOOM MEETING TYPES
 // ==========================================
 
+export interface IWaitingUser {
+  socketId: string;
+  userId: string;
+  userName: string;
+  avatar?: string;
+  joinedAt?: Date | string;
+}
+
 export interface IParticipant {
   id: string;
   socketId: string;
@@ -109,6 +117,8 @@ export interface IMeetingChatMessage {
   timestamp: string;
   isMe?: boolean;
   to?: string; // 'everyone' or specific user name
+  recipientSocketId?: string;
+  isDirect?: boolean;
 }
 
 export interface IFloatingReaction {
@@ -120,6 +130,7 @@ export interface IFloatingReaction {
 
 export interface ISecuritySettings {
   lockMeeting: boolean;
+  waitingRoom: boolean;
   allowShareScreen: boolean;
   allowChat: boolean;
   allowRename: boolean;

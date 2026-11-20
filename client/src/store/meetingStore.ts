@@ -16,17 +16,25 @@ import {
   IFloatingReaction,
   ISecuritySettings,
   IUserSummary,
+  IWaitingUser,
 } from '../types';
+import { useAppStore } from './appStore';
 
 interface MeetingState {
-  // Room Info
+  // Room Info & Security
   meetingId: string;
   title: string;
   hostId: string;
   hostName: string;
   passcode: string;
+  enteredPasscode: string;
+  passcodeError: string | null;
   isHost: boolean;
   isInLobby: boolean;
+  isInWaitingRoom: boolean;
+  waitingRoomMessage: string;
+  isWaitingRoomEnabled: boolean;
+  waitingUsers: IWaitingUser[];
   isJoined: boolean;
 
   // Media
@@ -69,7 +77,15 @@ interface MeetingState {
   securitySettings: ISecuritySettings;
 
   // Actions
-  initLobby: (meetingId: string, currentUser: IUserSummary) => Promise<void>;
+  setEnteredPasscode: (code: string) => void;
+  toggleWaitingRoom: () => void;
+  admitWaitingUser: (socketId: string) => void;
+  denyWaitingUser: (socketId: string) => void;
+  admitAllWaitingUsers: () => void;
+  hostMuteParticipant: (socketId: string) => void;
+  hostStopParticipantVideo: (socketId: string) => void;
+  hostKickParticipant: (socketId: string) => void;
+  initLobby: (meetingId: string, currentUser: IUserSummary, prefillPasscode?: string) => Promise<void>;
   joinMeeting: (currentUser: IUserSummary) => Promise<void>;
   leaveMeeting: (endForAll?: boolean) => void;
   toggleAudio: () => void;
@@ -79,7 +95,7 @@ interface MeetingState {
   toggleRecord: () => void;
   toggleHandRaised: () => void;
   setVirtualBg: (bg: VirtualBackgroundType, customUrl?: string) => Promise<void>;
-  sendChatMessage: (text: string, to?: string) => void;
+  sendChatMessage: (text: string, to?: string, recipientSocketId?: string) => void;
   sendReaction: (emoji: string) => void;
   setViewMode: (mode: 'gallery' | 'speaker') => void;
   setPinnedParticipant: (id: string | null) => void;
@@ -101,8 +117,14 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   hostId: '',
   hostName: '',
   passcode: '482910',
+  enteredPasscode: '',
+  passcodeError: null,
   isHost: false,
   isInLobby: true,
+  isInWaitingRoom: false,
+  waitingRoomMessage: 'Please wait, the meeting host will let you in soon.',
+  isWaitingRoomEnabled: false,
+  waitingUsers: [],
   isJoined: false,
 
   localStream: null,
@@ -139,13 +161,14 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   floatingReactions: [],
   securitySettings: {
     lockMeeting: false,
+    waitingRoom: false,
     allowShareScreen: true,
     allowChat: true,
     allowRename: true,
     allowUnmute: true,
   },
 
-  initLobby: async (meetingId, currentUser) => {
+  initLobby: async (meetingId, currentUser, prefillPasscode?: string) => {
     // Acquire local webcam & audio and initialize AI video processor + Pro Audio
     const rawStream = await MediaService.getLocalStream({ video: true, audio: true });
     const stream = (await videoProcessor.setSourceStream(rawStream)) || rawStream;
@@ -158,14 +181,19 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         : meetingId;
 
     const isHost = !get().hostId || get().hostId === currentUser._id;
+    const currentPasscode = get().passcode || Math.floor(100000 + Math.random() * 900000).toString();
 
     set({
       meetingId: formattedId,
       title: `${currentUser.name}'s Meeting Room`,
       hostId: currentUser._id,
       hostName: currentUser.name,
+      passcode: currentPasscode,
+      enteredPasscode: prefillPasscode || get().enteredPasscode || '',
+      passcodeError: null,
       isHost,
       isInLobby: true,
+      isInWaitingRoom: false,
       isJoined: false,
       localStream: stream,
       isAudioMuted: false,
@@ -174,9 +202,12 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   },
 
   joinMeeting: async (currentUser) => {
-    const { meetingId, isAudioMuted, isVideoOff, localStream } = get();
+    const { meetingId, isAudioMuted, isVideoOff, localStream, enteredPasscode, passcode } = get();
     const socket = socketService.getSocket();
     const cleanRoomId = meetingId.replace(/-/g, '');
+
+    // Reset errors
+    set({ passcodeError: null });
 
     // Play entrance chime
     soundEffects.playJoinChime();
@@ -184,14 +215,14 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     // Configure WebRTC Manager with local stream
     webrtcManager.setLocalStream(localStream);
 
-    // Self participant
+    // Initial self participant
     const selfParticipant: IParticipant = {
       id: 'self',
       socketId: socket?.id || 'self-socket',
       userId: currentUser._id,
       name: currentUser.name,
       avatar: currentUser.avatar,
-      isHost: true,
+      isHost: get().isHost,
       isAudioOn: !isAudioMuted,
       isVideoOn: !isVideoOff,
       isScreenSharing: false,
@@ -200,7 +231,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       isSpeaking: false,
     };
 
-    // Pre-populate with realistic colleagues so the room is also lively when tested solo
+    // Pre-populate with realistic colleagues for local testing
     const simulatedParticipants: IParticipant[] = [
       {
         id: 'sim-1',
@@ -233,8 +264,6 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     ];
 
     set({
-      isInLobby: false,
-      isJoined: true,
       participants: [selfParticipant, ...simulatedParticipants],
       activeSpeakerId: 'sim-1',
     });
@@ -261,14 +290,199 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     );
 
     if (socket) {
-      // 1. Join Socket room
+      // 1. Join Socket room with Passcode
       socket.emit('join-room', {
         roomId: cleanRoomId,
         userId: currentUser._id,
         userName: currentUser.name,
         avatar: currentUser.avatar,
+        passcode: enteredPasscode.trim() || passcode.trim(),
         isAudioOn: !isAudioMuted,
         isVideoOn: !isVideoOff,
+      });
+
+      // Handle successful room joined
+      socket.off('meeting:room-joined');
+      socket.on(
+        'meeting:room-joined',
+        (data: {
+          isHost: boolean;
+          passcode: string;
+          title: string;
+          hostId: string;
+          hostName: string;
+          waitingRoomEnabled?: boolean;
+        }) => {
+          set((state) => ({
+            isHost: data.isHost,
+            passcode: data.passcode || state.passcode,
+            title: data.title || state.title,
+            hostId: data.hostId || state.hostId,
+            hostName: data.hostName || state.hostName,
+            isWaitingRoomEnabled: !!data.waitingRoomEnabled,
+            isInLobby: false,
+            isInWaitingRoom: false,
+            isJoined: true,
+            participants: state.participants.map((p) =>
+              p.id === 'self' ? { ...p, isHost: data.isHost } : p
+            ),
+          }));
+        }
+      );
+
+      // Handle Waiting Room status (placed in waiting queue)
+      socket.off('meeting:waiting-room');
+      socket.on(
+        'meeting:waiting-room',
+        (data: { inWaitingRoom: boolean; message: string; title: string; meetingId: string }) => {
+          set({
+            isInLobby: false,
+            isInWaitingRoom: true,
+            isJoined: false,
+            waitingRoomMessage: data.message,
+            title: data.title,
+          });
+        }
+      );
+
+      // Handle Waiting Room updates (Host sees list of waiting users)
+      socket.off('meeting:waiting-room-updated');
+      socket.on('meeting:waiting-room-updated', (data: { waitingUsers: IWaitingUser[] }) => {
+        set({ waitingUsers: data.waitingUsers || [] });
+      });
+
+      // Handle Admitted by Host
+      socket.off('meeting:admitted');
+      socket.on(
+        'meeting:admitted',
+        async (data: {
+          roomId: string;
+          title: string;
+          hostId: string;
+          hostName: string;
+          passcode?: string;
+          users: any[];
+        }) => {
+          soundEffects.playJoinChime();
+          useAppStore.getState().showToast('The host has admitted you to the meeting!', 'success');
+
+          const admittedSelf: IParticipant = {
+            id: 'self',
+            socketId: socket.id || 'self-socket',
+            userId: currentUser._id,
+            name: currentUser.name,
+            avatar: currentUser.avatar,
+            isHost: false,
+            isAudioOn: !get().isAudioMuted,
+            isVideoOn: !get().isVideoOff,
+            isScreenSharing: false,
+            isHandRaised: false,
+            stream: get().localStream,
+            isSpeaking: false,
+          };
+
+          const newPeers: IParticipant[] = (data.users || [])
+            .filter((u) => u.socketId !== socket.id)
+            .map((u) => ({
+              id: u.socketId,
+              socketId: u.socketId,
+              userId: u.userId,
+              name: u.userName,
+              avatar: u.avatar,
+              isHost: false,
+              isAudioOn: u.isAudioOn ?? true,
+              isVideoOn: u.isVideoOn ?? true,
+              isScreenSharing: false,
+              isHandRaised: false,
+            }));
+
+          set({
+            isInWaitingRoom: false,
+            isInLobby: false,
+            isJoined: true,
+            title: data.title || get().title,
+            hostId: data.hostId || get().hostId,
+            hostName: data.hostName || get().hostName,
+            participants: [admittedSelf, ...newPeers],
+          });
+
+          // Create WebRTC offers to all existing peers
+          for (const peer of newPeers) {
+            await webrtcManager.createOfferToPeer(peer.socketId, {
+              socketId: socket.id,
+              userId: currentUser._id,
+              userName: currentUser.name,
+              avatar: currentUser.avatar,
+            });
+          }
+        }
+      );
+
+      // Handle Denied by Host
+      socket.off('meeting:denied');
+      socket.on('meeting:denied', (data: { message?: string }) => {
+        useAppStore.getState().showToast(data?.message || 'The host has denied your request to enter', 'error');
+        get().leaveMeeting();
+        window.location.href = '/';
+      });
+
+      // Handle Host Muting Me
+      socket.off('meeting:host-muted-you');
+      socket.on('meeting:host-muted-you', () => {
+        const stream = get().localStream;
+        if (stream) {
+          stream.getAudioTracks().forEach((track) => (track.enabled = false));
+        }
+        set((state) => ({
+          isAudioMuted: true,
+          participants: state.participants.map((p) => (p.id === 'self' ? { ...p, isAudioOn: false } : p)),
+        }));
+        useAppStore.getState().showToast('The host has muted your microphone', 'info');
+      });
+
+      // Handle Host Turning Off My Camera
+      socket.off('meeting:host-stopped-your-video');
+      socket.on('meeting:host-stopped-your-video', () => {
+        const stream = get().localStream;
+        if (stream) {
+          stream.getVideoTracks().forEach((track) => (track.enabled = false));
+        }
+        set((state) => ({
+          isVideoOff: true,
+          participants: state.participants.map((p) => (p.id === 'self' ? { ...p, isVideoOn: false } : p)),
+        }));
+        useAppStore.getState().showToast('The host has stopped your camera', 'info');
+      });
+
+      // Handle Host Kicking Me
+      socket.off('meeting:kicked-by-host');
+      socket.on('meeting:kicked-by-host', (data: { message?: string }) => {
+        useAppStore.getState().showToast(data?.message || 'You have been removed from the meeting by the host', 'error');
+        get().leaveMeeting();
+        window.location.href = '/';
+      });
+
+      // Handle Passcode or Room Error
+      socket.off('meeting:error');
+      socket.on('meeting:error', (data: { code: string; message: string }) => {
+        useAppStore.getState().showToast(data.message, 'error');
+        set({
+          passcodeError: data.message,
+          isInWaitingRoom: false,
+          isInLobby: true,
+          isJoined: false,
+        });
+      });
+
+      // Handle Security Settings Update (Waiting Room)
+      socket.off('meeting:security-updated');
+      socket.on('meeting:security-updated', (data: { waitingRoomEnabled?: boolean }) => {
+        if (typeof data.waitingRoomEnabled === 'boolean') {
+          set((state) => ({
+            isWaitingRoomEnabled: data.waitingRoomEnabled!,
+            securitySettings: { ...state.securitySettings, waitingRoom: data.waitingRoomEnabled! },
+          }));
+        }
       });
 
       // 2. Receive list of existing participants in room -> initiate WebRTC SDP offers to all of them
@@ -492,10 +706,22 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       socket.off('meeting:reaction-received');
       socket.off('meeting:hand-status');
       socket.off('meeting:host-muted-all');
+      socket.off('meeting:room-joined');
+      socket.off('meeting:waiting-room');
+      socket.off('meeting:waiting-room-updated');
+      socket.off('meeting:admitted');
+      socket.off('meeting:denied');
+      socket.off('meeting:host-muted-you');
+      socket.off('meeting:host-stopped-your-video');
+      socket.off('meeting:kicked-by-host');
+      socket.off('meeting:error');
+      socket.off('meeting:security-updated');
     }
 
     set({
       isInLobby: true,
+      isInWaitingRoom: false,
+      waitingUsers: [],
       isJoined: false,
       localStream: null,
       screenStream: null,
@@ -714,10 +940,118 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     }
   },
 
-  sendChatMessage: (text, to = 'everyone') => {
+  setEnteredPasscode: (code: string) => set({ enteredPasscode: code, passcodeError: null }),
+
+  toggleWaitingRoom: () => {
+    const { meetingId, isWaitingRoomEnabled } = get();
+    const next = !isWaitingRoomEnabled;
+    set((state) => ({
+      isWaitingRoomEnabled: next,
+      securitySettings: { ...state.securitySettings, waitingRoom: next },
+    }));
+
+    const socket = socketService.getSocket();
+    if (socket) {
+      socket.emit('meeting:toggle-waiting-room', {
+        roomId: meetingId.replace(/-/g, ''),
+        enabled: next,
+      });
+    }
+  },
+
+  admitWaitingUser: (socketId: string) => {
+    const { meetingId } = get();
+    set((state) => ({
+      waitingUsers: state.waitingUsers.filter((u) => u.socketId !== socketId),
+    }));
+
+    const socket = socketService.getSocket();
+    if (socket) {
+      socket.emit('meeting:admit-peer', {
+        roomId: meetingId.replace(/-/g, ''),
+        targetSocketId: socketId,
+      });
+    }
+  },
+
+  denyWaitingUser: (socketId: string) => {
+    const { meetingId } = get();
+    set((state) => ({
+      waitingUsers: state.waitingUsers.filter((u) => u.socketId !== socketId),
+    }));
+
+    const socket = socketService.getSocket();
+    if (socket) {
+      socket.emit('meeting:deny-peer', {
+        roomId: meetingId.replace(/-/g, ''),
+        targetSocketId: socketId,
+      });
+    }
+  },
+
+  admitAllWaitingUsers: () => {
+    const { meetingId } = get();
+    const socket = socketService.getSocket();
+    if (socket) {
+      socket.emit('meeting:admit-all', {
+        roomId: meetingId.replace(/-/g, ''),
+      });
+    }
+    set({ waitingUsers: [] });
+  },
+
+  hostMuteParticipant: (socketId: string) => {
+    const { meetingId } = get();
+    set((state) => ({
+      participants: state.participants.map((p) =>
+        p.socketId === socketId ? { ...p, isAudioOn: false } : p
+      ),
+    }));
+    const socket = socketService.getSocket();
+    if (socket) {
+      socket.emit('meeting:host-mute-peer', {
+        roomId: meetingId.replace(/-/g, ''),
+        targetSocketId: socketId,
+      });
+    }
+  },
+
+  hostStopParticipantVideo: (socketId: string) => {
+    const { meetingId } = get();
+    set((state) => ({
+      participants: state.participants.map((p) =>
+        p.socketId === socketId ? { ...p, isVideoOn: false } : p
+      ),
+    }));
+    const socket = socketService.getSocket();
+    if (socket) {
+      socket.emit('meeting:host-stop-video', {
+        roomId: meetingId.replace(/-/g, ''),
+        targetSocketId: socketId,
+      });
+    }
+  },
+
+  hostKickParticipant: (socketId: string) => {
+    const { meetingId } = get();
+    set((state) => ({
+      participants: state.participants.filter((p) => p.socketId !== socketId),
+    }));
+    const socket = socketService.getSocket();
+    if (socket) {
+      socket.emit('meeting:host-kick-peer', {
+        roomId: meetingId.replace(/-/g, ''),
+        targetSocketId: socketId,
+      });
+    }
+  },
+
+  sendChatMessage: (text: string, to = 'Everyone', recipientSocketId?: string) => {
     const { meetingId, participants } = get();
     const self = participants.find((p) => p.id === 'self');
     if (!self || !text.trim()) return;
+
+    const isDirect = !!recipientSocketId && recipientSocketId !== 'everyone';
 
     const message: IMeetingChatMessage = {
       id: `mmsg_${Date.now()}_${Math.random()}`,
@@ -727,7 +1061,9 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       text: text.trim(),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       isMe: true,
-      to,
+      to: isDirect ? to : 'Everyone',
+      recipientSocketId: isDirect ? recipientSocketId : undefined,
+      isDirect,
     };
 
     set((state) => ({
@@ -736,7 +1072,13 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 
     const socket = socketService.getSocket();
     if (socket) {
-      socket.emit('meeting:chat-message', { meetingId, text });
+      socket.emit('meeting:chat-message', {
+        meetingId,
+        text: text.trim(),
+        to: isDirect ? to : 'Everyone',
+        recipientSocketId: isDirect ? recipientSocketId : undefined,
+        recipientName: isDirect ? to : undefined,
+      });
     }
   },
 

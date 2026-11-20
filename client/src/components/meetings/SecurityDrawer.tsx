@@ -1,7 +1,7 @@
 import React from 'react';
 import { useMeetingStore } from '../../store/meetingStore';
 import { useAppStore } from '../../store/appStore';
-import { Shield, X, Lock, Check } from 'lucide-react';
+import { Shield, X, Lock, Check, Clock } from 'lucide-react';
 
 export const SecurityDrawer: React.FC = () => {
   const {
@@ -9,6 +9,9 @@ export const SecurityDrawer: React.FC = () => {
     setActiveDrawer,
     securitySettings,
     updateSecuritySetting,
+    isWaitingRoomEnabled,
+    toggleWaitingRoom,
+    isHost,
   } = useMeetingStore();
 
   const { showToast } = useAppStore();
@@ -38,7 +41,42 @@ export const SecurityDrawer: React.FC = () => {
         </button>
       </div>
 
-      <div className="p-4 space-y-6 flex-1 overflow-y-auto">
+      <div className="p-4 space-y-4 flex-1 overflow-y-auto">
+        {/* Enable Waiting Room Toggle (Host Only) */}
+        {isHost && (
+          <div className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-cyan-400" />
+                <span className="font-bold text-xs text-zinc-200">Enable Waiting Room</span>
+              </div>
+              <button
+                onClick={() => {
+                  toggleWaitingRoom();
+                  showToast(
+                    !isWaitingRoomEnabled
+                      ? 'Waiting Room enabled. Participants will need admission.'
+                      : 'Waiting Room disabled.',
+                    'info'
+                  );
+                }}
+                className={`w-10 h-6 rounded-full transition-colors relative ${
+                  isWaitingRoomEnabled ? 'bg-cyan-600' : 'bg-zinc-800'
+                }`}
+              >
+                <span
+                  className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-transform ${
+                    isWaitingRoomEnabled ? 'left-5' : 'left-1'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[11px] text-zinc-400 leading-relaxed">
+              When enabled, joining participants remain in the waiting room until admitted by the host.
+            </p>
+          </div>
+        )}
+
         {/* Lock Meeting Toggle */}
         <div className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 space-y-3">
           <div className="flex items-center justify-between">
@@ -69,7 +107,7 @@ export const SecurityDrawer: React.FC = () => {
         </div>
 
         {/* Participant Permissions */}
-        <div className="space-y-3">
+        <div className="space-y-3 pt-2">
           <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider block">
             Allow Participants To:
           </span>

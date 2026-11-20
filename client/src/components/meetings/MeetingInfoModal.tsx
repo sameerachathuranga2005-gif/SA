@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useMeetingStore } from '../../store/meetingStore';
 import { useAppStore } from '../../store/appStore';
-import { ShieldCheck, Copy, Check, X, Lock } from 'lucide-react';
+import { ShieldCheck, Copy, Check, X, Lock, Share2 } from 'lucide-react';
 
 interface MeetingInfoModalProps {
   isOpen: boolean;
@@ -13,15 +13,17 @@ export const MeetingInfoModal: React.FC<MeetingInfoModalProps> = ({ isOpen, onCl
   const { showToast } = useAppStore();
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
+  const [copiedInvite, setCopiedInvite] = useState(false);
 
   if (!isOpen) return null;
 
-  const inviteLink = `${window.location.origin}/meeting/${meetingId.replace(/-/g, '')}`;
+  const cleanId = meetingId.replace(/-/g, '');
+  const directLink = `${window.location.origin}/meeting/${cleanId}?pwd=${passcode}`;
 
   const handleCopyLink = () => {
-    navigator.clipboard.writeText(inviteLink);
+    navigator.clipboard.writeText(directLink);
     setCopiedLink(true);
-    showToast('Meeting link copied to clipboard!', 'success');
+    showToast('Direct join link copied to clipboard!', 'success');
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
@@ -30,6 +32,22 @@ export const MeetingInfoModal: React.FC<MeetingInfoModalProps> = ({ isOpen, onCl
     setCopiedId(true);
     showToast(`Copied Meeting ID: ${meetingId}`, 'success');
     setTimeout(() => setCopiedId(false), 2000);
+  };
+
+  const handleCopyFullInvite = () => {
+    const text = `${hostName || 'The host'} is inviting you to a scheduled OmniSync Video Meeting:
+
+Topic: ${title}
+Meeting ID: ${meetingId}
+Passcode: ${passcode}
+
+Join Meeting via Direct Link:
+${directLink}`;
+
+    navigator.clipboard.writeText(text);
+    setCopiedInvite(true);
+    showToast('Full meeting invitation copied to clipboard!', 'success');
+    setTimeout(() => setCopiedInvite(false), 2000);
   };
 
   return (
@@ -90,9 +108,9 @@ export const MeetingInfoModal: React.FC<MeetingInfoModalProps> = ({ isOpen, onCl
           </div>
 
           <div>
-            <span className="text-zinc-500 block mb-1">Invitation Link</span>
+            <span className="text-zinc-500 block mb-1">Direct Invitation Link</span>
             <div className="flex items-center gap-2 p-2 rounded-xl bg-zinc-950 border border-zinc-800 font-mono text-[11px] text-zinc-400 overflow-hidden">
-              <span className="truncate flex-1">{inviteLink}</span>
+              <span className="truncate flex-1">{directLink}</span>
               <button
                 onClick={handleCopyLink}
                 className="p-1.5 hover:text-cyan-400 text-zinc-500 shrink-0"
@@ -104,11 +122,19 @@ export const MeetingInfoModal: React.FC<MeetingInfoModalProps> = ({ isOpen, onCl
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="flex justify-end pt-3 border-t border-zinc-800">
+        {/* Footer Actions */}
+        <div className="flex items-center justify-between pt-3 border-t border-zinc-800 gap-3">
+          <button
+            onClick={handleCopyFullInvite}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs transition-colors shadow-lg shadow-cyan-600/20"
+          >
+            {copiedInvite ? <Check className="w-4 h-4 text-emerald-200" /> : <Share2 className="w-4 h-4" />}
+            <span>{copiedInvite ? 'Invitation Copied!' : 'Copy Full Invite'}</span>
+          </button>
+
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold text-xs transition-colors"
+            className="px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold text-xs transition-colors"
           >
             Close
           </button>

@@ -438,3 +438,4 @@ export const VideoSettingsModal: React.FC<VideoSettingsModalProps> = ({ isOpen, 
     </div>
   );
 };
+
