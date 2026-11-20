@@ -10,6 +10,7 @@ import { ReactionsOverlay } from './ReactionsOverlay';
 import { LeaveMeetingModal } from './LeaveMeetingModal';
 import { MeetingWhiteboard } from './MeetingWhiteboard';
 import { VirtualBackgroundModal } from './VirtualBackgroundModal';
+import { VideoSettingsModal } from './VideoSettingsModal';
 import { MeetingInfoModal } from './MeetingInfoModal';
 import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
 import { ShieldCheck, Copy, Circle, Info } from 'lucide-react';
@@ -22,6 +23,7 @@ export const MeetingRoom: React.FC = () => {
     recordingDuration,
     isWhiteboardOpen,
     isVirtualBgModalOpen,
+    isVideoSettingsModalOpen,
     isInfoModalOpen,
     isShortcutsModalOpen,
     activeDrawer,
@@ -32,6 +34,7 @@ export const MeetingRoom: React.FC = () => {
     toggleRecord,
     setActiveDrawer,
     setVirtualBgModalOpen,
+    setVideoSettingsModalOpen,
     setInfoModalOpen,
     setShortcutsModalOpen,
   } = useMeetingStore();
@@ -88,6 +91,7 @@ export const MeetingRoom: React.FC = () => {
       if (e.key === 'Escape') {
         if (isWhiteboardOpen) toggleWhiteboard();
         if (isVirtualBgModalOpen) setVirtualBgModalOpen(false);
+        if (isVideoSettingsModalOpen) setVideoSettingsModalOpen(false);
         if (isInfoModalOpen) setInfoModalOpen(false);
         if (isShortcutsModalOpen) setShortcutsModalOpen(false);
         if (activeDrawer) setActiveDrawer(null);
@@ -104,11 +108,13 @@ export const MeetingRoom: React.FC = () => {
     toggleRecord,
     isWhiteboardOpen,
     isVirtualBgModalOpen,
+    isVideoSettingsModalOpen,
     isInfoModalOpen,
     isShortcutsModalOpen,
     activeDrawer,
     setActiveDrawer,
     setVirtualBgModalOpen,
+    setVideoSettingsModalOpen,
     setInfoModalOpen,
     setShortcutsModalOpen,
   ]);
@@ -191,6 +197,10 @@ export const MeetingRoom: React.FC = () => {
       <VirtualBackgroundModal
         isOpen={isVirtualBgModalOpen}
         onClose={() => setVirtualBgModalOpen(false)}
+      />
+      <VideoSettingsModal
+        isOpen={isVideoSettingsModalOpen}
+        onClose={() => setVideoSettingsModalOpen(false)}
       />
       <MeetingInfoModal
         isOpen={isInfoModalOpen}

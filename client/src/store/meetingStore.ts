@@ -3,7 +3,13 @@ import { socketService } from '../services/socket';
 import { MediaService, MeetingRecorder, webrtcManager } from '../services/webrtc';
 import { soundEffects } from '../services/soundEffects';
 import { VIRTUAL_BACKGROUND_PRESETS, VirtualBackgroundType } from '../services/videoFilters';
-import { videoProcessor, BackgroundMode } from '../services/videoProcessor';
+import {
+  videoProcessor,
+  BackgroundMode,
+  IVideoAdjustments,
+  DEFAULT_VIDEO_ADJUSTMENTS,
+} from '../services/videoProcessor';
+import { audioProcessor } from '../services/audioProcessor';
 import {
   IParticipant,
   IMeetingChatMessage,
@@ -31,6 +37,9 @@ interface MeetingState {
   isScreenSharing: boolean;
   virtualBg: VirtualBackgroundType;
   customBgUrl: string | null;
+  videoAdjustments: IVideoAdjustments;
+  isProNoiseSuppressionEnabled: boolean;
+  isVideoSettingsModalOpen: boolean;
 
   // Recording
   isRecording: boolean;
@@ -77,6 +86,9 @@ interface MeetingState {
   setActiveDrawer: (drawer: 'chat' | 'participants' | 'security' | null) => void;
   setLeaveModalOpen: (open: boolean) => void;
   setVirtualBgModalOpen: (open: boolean) => void;
+  setVideoSettingsModalOpen: (open: boolean) => void;
+  updateVideoAdjustments: (adjustments: Partial<IVideoAdjustments>) => void;
+  toggleProNoiseSuppression: () => Promise<void>;
   setInfoModalOpen: (open: boolean) => void;
   setShortcutsModalOpen: (open: boolean) => void;
   muteAllParticipants: () => void;
@@ -100,6 +112,9 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   isScreenSharing: false,
   virtualBg: 'none',
   customBgUrl: null,
+  videoAdjustments: { ...DEFAULT_VIDEO_ADJUSTMENTS },
+  isProNoiseSuppressionEnabled: true,
+  isVideoSettingsModalOpen: false,
 
   isRecording: false,
   recordingDuration: 0,
@@ -131,9 +146,10 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   },
 
   initLobby: async (meetingId, currentUser) => {
-    // Acquire local webcam & audio and initialize AI video processor
+    // Acquire local webcam & audio and initialize AI video processor + Pro Audio
     const rawStream = await MediaService.getLocalStream({ video: true, audio: true });
     const stream = (await videoProcessor.setSourceStream(rawStream)) || rawStream;
+    audioProcessor.init(rawStream);
 
     const cleanId = meetingId.replace(/-/g, '');
     const formattedId =
@@ -764,6 +780,19 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 
   setLeaveModalOpen: (open) => set({ isLeaveModalOpen: open }),
   setVirtualBgModalOpen: (open) => set({ isVirtualBgModalOpen: open }),
+  setVideoSettingsModalOpen: (open) => set({ isVideoSettingsModalOpen: open }),
+  updateVideoAdjustments: (adjustments) => {
+    videoProcessor.setAdjustments(adjustments);
+    set({ videoAdjustments: videoProcessor.getAdjustments() });
+  },
+  toggleProNoiseSuppression: async () => {
+    const next = !get().isProNoiseSuppressionEnabled;
+    set({ isProNoiseSuppressionEnabled: next });
+    const newTrack = audioProcessor.setProNoiseSuppression(next);
+    if (newTrack) {
+      await webrtcManager.replaceAudioTrack(newTrack);
+    }
+  },
   setInfoModalOpen: (open) => set({ isInfoModalOpen: open }),
   setShortcutsModalOpen: (open) => set({ isShortcutsModalOpen: open }),
 

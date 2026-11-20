@@ -7,6 +7,24 @@ export interface BackgroundSettings {
   imageUrl?: string;
 }
 
+export interface IVideoAdjustments {
+  touchUpAppearance: boolean;
+  touchUpIntensity: number; // 0 - 100
+  brightness: number; // 50 - 150
+  contrast: number; // 50 - 150
+  saturation: number; // 50 - 150
+  framingMode: 'full' | 'center-stage';
+}
+
+export const DEFAULT_VIDEO_ADJUSTMENTS: IVideoAdjustments = {
+  touchUpAppearance: false,
+  touchUpIntensity: 45,
+  brightness: 100,
+  contrast: 100,
+  saturation: 100,
+  framingMode: 'full',
+};
+
 class VideoProcessorService {
   private selfieSegmentation: SelfieSegmentation | null = null;
   private isModelLoaded = false;
@@ -19,9 +37,14 @@ class VideoProcessorService {
   private ctx: CanvasRenderingContext2D | null = null;
 
   private currentSettings: BackgroundSettings = { mode: 'none' };
+  private adjustments: IVideoAdjustments = { ...DEFAULT_VIDEO_ADJUSTMENTS };
   private bgImage: HTMLImageElement | null = null;
   private outputStream: MediaStream | null = null;
   private processedVideoTrack: MediaStreamTrack | null = null;
+
+  // Center Stage Auto-Framing Crop coordinates with smooth interpolation (lerp)
+  private currentCrop = { x: 0, y: 0, w: 1280, h: 720 };
+  private targetCrop = { x: 0, y: 0, w: 1280, h: 720 };
 
   constructor() {
     this.initCanvas();
@@ -90,6 +113,8 @@ class VideoProcessorService {
             const h = this.videoElement.videoHeight || 720;
             this.canvas.width = w;
             this.canvas.height = h;
+            this.currentCrop = { x: 0, y: 0, w, h };
+            this.targetCrop = { x: 0, y: 0, w, h };
           }
           resolve();
         };
@@ -143,10 +168,25 @@ class VideoProcessorService {
       this.bgImage = null;
     }
 
-    // Automatically load model if blur or virtual background is requested
-    if (settings.mode !== 'none' && !this.isModelLoaded) {
+    // Automatically load model if blur, virtual background, or center stage is requested
+    if (
+      (settings.mode !== 'none' || this.adjustments.framingMode === 'center-stage') &&
+      !this.isModelLoaded
+    ) {
       await this.initModel();
     }
+  }
+
+  // Update video appearance adjustments
+  public setAdjustments(newAdjustments: Partial<IVideoAdjustments>) {
+    this.adjustments = { ...this.adjustments, ...newAdjustments };
+    if (this.adjustments.framingMode === 'center-stage' && !this.isModelLoaded) {
+      this.initModel().catch(() => {});
+    }
+  }
+
+  public getAdjustments(): IVideoAdjustments {
+    return { ...this.adjustments };
   }
 
   private startProcessing() {
@@ -161,12 +201,12 @@ class VideoProcessorService {
         this.videoElement.readyState >= 2 &&
         !this.videoElement.paused
       ) {
-        if (
-          this.currentSettings.mode === 'none' ||
-          !this.isModelLoaded ||
-          !this.selfieSegmentation
-        ) {
-          // Direct camera rendering when mode is none
+        const needsSegmentation =
+          this.currentSettings.mode !== 'none' ||
+          this.adjustments.framingMode === 'center-stage';
+
+        if (!needsSegmentation || !this.isModelLoaded || !this.selfieSegmentation) {
+          // Direct camera rendering when mode is none and not center stage
           this.renderDirect();
         } else {
           try {
@@ -183,44 +223,114 @@ class VideoProcessorService {
     this.animationFrameId = requestAnimationFrame(loop);
   }
 
-  // Direct video render when background is 'none'
+  // Direct camera render with color adjustments and optional center crop
   private renderDirect() {
     if (!this.ctx || !this.canvas || !this.videoElement) return;
     const { width, height } = this.canvas;
+    const { brightness, contrast, saturation } = this.adjustments;
+
+    this.updateFramingTargets(width, height);
+
+    this.ctx.save();
     this.ctx.clearRect(0, 0, width, height);
-    this.ctx.drawImage(this.videoElement, 0, 0, width, height);
+
+    // Color Correction Filter
+    this.ctx.filter = `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%)`;
+
+    // Draw video using interpolated framing crop
+    this.ctx.drawImage(
+      this.videoElement,
+      this.currentCrop.x,
+      this.currentCrop.y,
+      this.currentCrop.w,
+      this.currentCrop.h,
+      0,
+      0,
+      width,
+      height
+    );
+
+    // Apply Touch Up Skin Smoothing / Radiance if enabled
+    this.applyTouchUp(width, height);
+
+    this.ctx.restore();
   }
 
-  // Render segmentation with foreground person + smooth feathering + background blur or image
+  // Render segmentation with foreground person + smooth feathering + background blur or image + color adjustments
   private renderFrame(results: Results) {
     if (!this.ctx || !this.canvas) return;
     const { width, height } = this.canvas;
     const { mode } = this.currentSettings;
+    const { brightness, contrast, saturation } = this.adjustments;
+
+    this.updateFramingTargets(width, height);
 
     this.ctx.save();
     this.ctx.clearRect(0, 0, width, height);
 
     // 1. Draw segmentation mask with smooth edge feathering (2.5px blur on the mask)
     this.ctx.filter = 'blur(2.5px)';
-    this.ctx.drawImage(results.segmentationMask, 0, 0, width, height);
+    this.ctx.drawImage(
+      results.segmentationMask,
+      this.currentCrop.x,
+      this.currentCrop.y,
+      this.currentCrop.w,
+      this.currentCrop.h,
+      0,
+      0,
+      width,
+      height
+    );
     this.ctx.filter = 'none';
 
     // 2. Composite foreground person: only keep pixels inside the mask
     this.ctx.globalCompositeOperation = 'source-in';
-    this.ctx.drawImage(results.image, 0, 0, width, height);
+    this.ctx.filter = `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%)`;
+    this.ctx.drawImage(
+      results.image,
+      this.currentCrop.x,
+      this.currentCrop.y,
+      this.currentCrop.w,
+      this.currentCrop.h,
+      0,
+      0,
+      width,
+      height
+    );
+    this.ctx.filter = 'none';
 
     // 3. Draw background behind the person
     this.ctx.globalCompositeOperation = 'destination-over';
 
     if (mode === 'blur-soft') {
       // Gaussian Blur 12px for Soft Blur
-      this.ctx.filter = 'blur(12px)';
-      this.ctx.drawImage(results.image, 0, 0, width, height);
+      this.ctx.filter = `blur(12px) brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%)`;
+      this.ctx.drawImage(
+        results.image,
+        this.currentCrop.x,
+        this.currentCrop.y,
+        this.currentCrop.w,
+        this.currentCrop.h,
+        0,
+        0,
+        width,
+        height
+      );
       this.ctx.filter = 'none';
     } else if (mode === 'blur-strong') {
       // Gaussian Blur 20px for Strong Blur
-      this.ctx.filter = 'blur(20px)';
-      this.ctx.drawImage(results.image, 0, 0, width, height);
+      this.ctx.filter = `blur(20px) brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%)`;
+      this.ctx.drawImage(
+        results.image,
+        this.currentCrop.x,
+        this.currentCrop.y,
+        this.currentCrop.w,
+        this.currentCrop.h,
+        0,
+        0,
+        width,
+        height
+      );
       this.ctx.filter = 'none';
     } else if (mode === 'image' && this.bgImage) {
       // Draw Virtual Background image with aspect-ratio cover
@@ -241,9 +351,60 @@ class VideoProcessorService {
 
       this.ctx.drawImage(this.bgImage, drawX, drawY, drawW, drawH);
     } else {
-      this.ctx.drawImage(results.image, 0, 0, width, height);
+      this.ctx.filter = `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%)`;
+      this.ctx.drawImage(
+        results.image,
+        this.currentCrop.x,
+        this.currentCrop.y,
+        this.currentCrop.w,
+        this.currentCrop.h,
+        0,
+        0,
+        width,
+        height
+      );
+      this.ctx.filter = 'none';
     }
 
+    // 4. Apply Touch Up My Appearance skin radiance
+    this.applyTouchUp(width, height);
+
+    this.ctx.restore();
+  }
+
+  // Calculate smooth camera framing interpolation
+  private updateFramingTargets(width: number, height: number) {
+    if (this.adjustments.framingMode === 'center-stage') {
+      // Zoom 1.32x centered on the speaker's upper chest / head
+      const zoom = 1.32;
+      const targetW = width / zoom;
+      const targetH = height / zoom;
+      const targetX = (width - targetW) / 2;
+      const targetY = (height - targetH) * 0.35; // Position slightly higher to frame head nicely
+
+      this.targetCrop = { x: targetX, y: targetY, w: targetW, h: targetH };
+    } else {
+      // Full Camera View: uncropped 1.0x wide view
+      this.targetCrop = { x: 0, y: 0, w: width, h: height };
+    }
+
+    // Smooth lerp interpolation (0.08 per frame gives natural cinematic transition)
+    const lerp = 0.08;
+    this.currentCrop.x += (this.targetCrop.x - this.currentCrop.x) * lerp;
+    this.currentCrop.y += (this.targetCrop.y - this.currentCrop.y) * lerp;
+    this.currentCrop.w += (this.targetCrop.w - this.currentCrop.w) * lerp;
+    this.currentCrop.h += (this.targetCrop.h - this.currentCrop.h) * lerp;
+  }
+
+  // Subtle warm radiance & skin smoothing overlay for "Touch Up My Appearance"
+  private applyTouchUp(width: number, height: number) {
+    if (!this.ctx || !this.adjustments.touchUpAppearance) return;
+
+    const intensity = this.adjustments.touchUpIntensity / 100;
+    this.ctx.save();
+    this.ctx.globalCompositeOperation = 'soft-light';
+    this.ctx.fillStyle = `rgba(255, 235, 220, ${0.12 + intensity * 0.24})`;
+    this.ctx.fillRect(0, 0, width, height);
     this.ctx.restore();
   }
 
@@ -271,4 +432,3 @@ class VideoProcessorService {
 }
 
 export const videoProcessor = new VideoProcessorService();
-

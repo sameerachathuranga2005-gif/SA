@@ -211,6 +211,24 @@ export class WebRTCManager {
     }
   }
 
+  // Replace audio track across all active peer connections (e.g., when toggling Pro noise cancellation)
+  public async replaceAudioTrack(newTrack: MediaStreamTrack | null): Promise<void> {
+    for (const [socketId, pc] of this.peers.entries()) {
+      try {
+        const senders = pc.getSenders();
+        const audioSender = senders.find((s) => s.track && s.track.kind === 'audio');
+
+        if (audioSender && newTrack) {
+          await audioSender.replaceTrack(newTrack);
+        } else if (!audioSender && newTrack && this.localStream) {
+          pc.addTrack(newTrack, this.localStream);
+        }
+      } catch (err) {
+        console.error('[WebRTC] Error replacing audio track for peer:', socketId, err);
+      }
+    }
+  }
+
   // Close specific peer connection
   public closePeerConnection(socketId: string) {
     const pc = this.peers.get(socketId);

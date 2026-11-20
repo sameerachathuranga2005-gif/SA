@@ -24,6 +24,7 @@ import {
   Command,
   PictureInPicture2,
   Copy,
+  Sliders,
 } from 'lucide-react';
 
 export const MeetingControls: React.FC = () => {
@@ -36,6 +37,8 @@ export const MeetingControls: React.FC = () => {
     recordingDuration,
     isHandRaised,
     isWhiteboardOpen,
+    isVideoSettingsModalOpen,
+    isProNoiseSuppressionEnabled,
     participants,
     viewMode,
     activeDrawer,
@@ -46,11 +49,13 @@ export const MeetingControls: React.FC = () => {
     toggleWhiteboard,
     toggleRecord,
     toggleHandRaised,
+    toggleProNoiseSuppression,
     sendReaction,
     setViewMode,
     setActiveDrawer,
     setLeaveModalOpen,
     setVirtualBgModalOpen,
+    setVideoSettingsModalOpen,
     setShortcutsModalOpen,
   } = useMeetingStore();
 
@@ -166,8 +171,40 @@ export const MeetingControls: React.FC = () => {
                 <span>Default Microphone (Built-in)</span>
                 <Check className="w-3.5 h-3.5 text-emerald-400" />
               </div>
-              <div className="pt-2 border-t border-zinc-800 text-zinc-400">
-                <span>High Fidelity Audio • Noise Suppression Active</span>
+
+              {/* Pro Noise Suppression Toggle */}
+              <button
+                onClick={() => toggleProNoiseSuppression()}
+                className={`w-full flex items-center justify-between p-2.5 rounded-xl border transition-colors ${
+                  isProNoiseSuppressionEnabled
+                    ? 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border-emerald-500/30'
+                    : 'bg-zinc-800/60 hover:bg-zinc-800 text-zinc-400 border-zinc-700/50'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Sliders className="w-4 h-4 text-emerald-400" />
+                  <span className="font-semibold">Pro Noise Cancellation</span>
+                </div>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${
+                  isProNoiseSuppressionEnabled ? 'bg-emerald-500/20 text-emerald-300' : 'bg-zinc-700 text-zinc-400'
+                }`}>
+                  {isProNoiseSuppressionEnabled ? 'ON' : 'OFF'}
+                </span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setAudioMenuOpen(false);
+                  setVideoSettingsModalOpen(true);
+                }}
+                className="w-full flex items-center justify-between p-2 rounded-lg bg-zinc-800/80 hover:bg-zinc-800 text-zinc-300 transition-colors"
+              >
+                <span>Studio Audio Settings</span>
+                <Sliders className="w-3.5 h-3.5 text-zinc-400" />
+              </button>
+
+              <div className="pt-2 border-t border-zinc-800 text-zinc-400 text-[11px]">
+                <span>High Fidelity Audio • Web Audio DSP Active</span>
               </div>
             </div>
           )}
@@ -223,6 +260,21 @@ export const MeetingControls: React.FC = () => {
                   <span>Virtual Background & Blur</span>
                 </div>
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/20">PRO</span>
+              </button>
+
+              {/* Video Studio Settings Trigger */}
+              <button
+                onClick={() => {
+                  setVideoMenuOpen(false);
+                  setVideoSettingsModalOpen(true);
+                }}
+                className="w-full flex items-center justify-between p-2.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 font-semibold border border-purple-500/30 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Sliders className="w-4 h-4 text-purple-400" />
+                  <span>Touch Up & Studio Effects</span>
+                </div>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20">STUDIO</span>
               </button>
 
               <div className="pt-2 border-t border-zinc-800 text-zinc-400">
@@ -327,6 +379,20 @@ export const MeetingControls: React.FC = () => {
         >
           <Palette className="w-5 h-5 text-indigo-400" />
           <span className="text-[10px] mt-1 hidden md:block">Board</span>
+        </button>
+
+        {/* Video & Audio Studio */}
+        <button
+          onClick={() => setVideoSettingsModalOpen(true)}
+          className={`flex flex-col items-center justify-center w-12 md:w-14 py-1.5 rounded-xl transition-all ${
+            isVideoSettingsModalOpen
+              ? 'bg-purple-600/30 text-purple-300 border border-purple-500/50'
+              : 'text-zinc-400 hover:text-purple-300 hover:bg-zinc-900'
+          }`}
+          title="Video Touch Up & Audio Studio Settings"
+        >
+          <Sliders className="w-5 h-5 text-purple-400" />
+          <span className="text-[10px] mt-1 hidden md:block">Studio</span>
         </button>
 
         {/* Record Meeting */}
