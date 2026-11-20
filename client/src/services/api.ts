@@ -1,13 +1,19 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+// Get base server URL from VITE_API_URL or fallback to cloud backend
+const rawUrl = (import.meta.env.VITE_API_URL as string) || 'https://sameeraas.alwaysdata.net';
+// Strip trailing slashes
+const cleanUrl = rawUrl.replace(/\/+$/, '');
+// Ensure it points to the /api base path
+export const API_URL = cleanUrl.endsWith('/api') ? cleanUrl : `${cleanUrl}/api`;
 
 export const api = axios.create({
   baseURL: API_URL,
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 10000,
+  timeout: 15000,
+  withCredentials: true,
 });
 
 // Attach Authorization Bearer token automatically
@@ -33,4 +39,3 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
-

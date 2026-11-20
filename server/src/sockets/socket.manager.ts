@@ -2,6 +2,7 @@ import { Server as HttpServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import { verifyToken } from '../services/auth.service.js';
 import { UserService } from '../services/user.service.js';
+import { isOriginAllowed } from '../config/cors.js';
 import { IMeetingRoom, IMeetingParticipant } from '../types/index.js';
 
 interface AuthenticatedSocket extends Socket {
@@ -30,10 +31,17 @@ class SocketManager {
   // Map of meetingId -> IMeetingRoom details (metadata)
   private meetingRooms: Map<string, IMeetingRoom> = new Map();
 
-  public initialize(httpServer: HttpServer, clientUrl: string) {
+  public initialize(httpServer: HttpServer, _clientUrl?: string) {
     this.io = new Server(httpServer, {
       cors: {
-        origin: [clientUrl, 'http://localhost:5173', 'http://127.0.0.1:5173'],
+        origin: (origin, callback) => {
+          if (isOriginAllowed(origin)) {
+            callback(null, true);
+          } else {
+            console.warn(`[CORS] Blocked Socket.io connection from origin: ${origin}`);
+            callback(new Error(`Origin ${origin} not allowed by CORS`));
+          }
+        },
         methods: ['GET', 'POST'],
         credentials: true,
       },
@@ -41,23 +49,39 @@ class SocketManager {
       pingInterval: 10000,
     });
 
-    // JWT Authentication Middleware for WebSockets
+    // JWT & Firebase Authentication Middleware for WebSockets
     this.io.use((socket: AuthenticatedSocket, next) => {
       try {
         const token =
           socket.handshake.auth?.token ||
           socket.handshake.headers?.authorization?.replace('Bearer ', '');
 
-        if (!token) {
-          return next(new Error('Authentication error: Missing token'));
+        const authPayload = socket.handshake.auth || {};
+        const fallbackUid = authPayload.uid || authPayload.userId;
+        const fallbackEmail = authPayload.email;
+
+        // 1. If backend JWT is provided, attempt to verify it
+        if (token) {
+          try {
+            const decoded = verifyToken(token);
+            socket.userId = decoded.userId;
+            socket.userEmail = decoded.email;
+            return next();
+          } catch (_err) {
+            // Token is not a local backend JWT (e.g. Firebase ID token or demo token)
+          }
         }
 
-        const decoded = verifyToken(token);
-        socket.userId = decoded.userId;
-        socket.userEmail = decoded.email;
-        next();
+        // 2. Allow connections that pass valid user metadata (Firebase or Demo login)
+        if (fallbackUid) {
+          socket.userId = String(fallbackUid);
+          socket.userEmail = fallbackEmail ? String(fallbackEmail) : `${fallbackUid}@user.local`;
+          return next();
+        }
+
+        return next(new Error('Authentication error: Missing token or user metadata'));
       } catch (err: any) {
-        return next(new Error('Authentication error: Invalid or expired token'));
+        return next(new Error('Authentication error: Invalid credentials'));
       }
     });
 

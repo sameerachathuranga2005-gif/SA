@@ -1,5 +1,7 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from './firebase';
 import { useAuthStore } from './store/authStore';
 import { AuthPage } from './pages/AuthPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -29,6 +31,19 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 };
 
 export const App: React.FC = () => {
+  const { syncFirebaseUser } = useAuthStore();
+
+  useEffect(() => {
+    // Listen for Firebase Auth state changes
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser) {
+        syncFirebaseUser(firebaseUser);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [syncFirebaseUser]);
+
   return (
     <BrowserRouter>
       <Routes>
@@ -72,4 +87,3 @@ export const App: React.FC = () => {
 };
 
 export default App;
-

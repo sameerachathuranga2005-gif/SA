@@ -449,17 +449,21 @@ export class UserService {
 
   // Set user online status
   static async setUserOnlineStatus(userId: string, isOnline: boolean) {
-    if (getIsMongoConnected()) {
-      await User.findByIdAndUpdate(userId, {
-        isOnline,
-        lastSeen: new Date(),
-      });
-    } else {
-      const user = inMemoryUsers.get(userId);
-      if (user) {
-        user.isOnline = isOnline;
-        user.lastSeen = new Date();
+    try {
+      if (getIsMongoConnected() && mongoose.isValidObjectId(userId)) {
+        await User.findByIdAndUpdate(userId, {
+          isOnline,
+          lastSeen: new Date(),
+        });
+      } else {
+        const user = inMemoryUsers.get(userId);
+        if (user) {
+          user.isOnline = isOnline;
+          user.lastSeen = new Date();
+        }
       }
+    } catch (_err) {
+      // Ignore cast errors for non-Mongo/Firebase UIDs
     }
   }
 }

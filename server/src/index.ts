@@ -5,6 +5,7 @@ import http from 'http';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { connectDB } from './config/db.js';
+import { expressCorsOptions } from './config/cors.js';
 import authRoutes from './routes/auth.routes.js';
 import userRoutes from './routes/user.routes.js';
 import meetingRoutes from './routes/meeting.routes.js';
@@ -13,16 +14,10 @@ import { socketManager } from './sockets/socket.manager.js';
 const app = express();
 const server = http.createServer(app);
 
-const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+const PORT = process.env.PORT || 7860;
 
-// Middleware
-app.use(
-  cors({
-    origin: [CLIENT_URL, 'http://localhost:5173', 'http://127.0.0.1:5173'],
-    credentials: true,
-  })
-);
+// Apply CORS with credentials and dynamic environment origins
+app.use(cors(expressCorsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -63,8 +58,8 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 async function startServer() {
   await connectDB();
 
-  // Initialize Socket.io
-  socketManager.initialize(server, CLIENT_URL);
+  // Initialize Socket.io with cloud-ready CORS configuration
+  socketManager.initialize(server);
 
   server.listen(PORT, () => {
     console.log(`===============================================`);
@@ -79,4 +74,3 @@ startServer().catch((err) => {
   console.error('Fatal Server Boot Error:', err);
   process.exit(1);
 });
-
